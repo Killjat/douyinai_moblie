@@ -1,0 +1,16 @@
+{
+  "name": "douyin-followers-extractor",
+  "version": "1.0.0",
+  "description": "抖音粉丝列表提取工具",
+  "main": "douyin-followers.js",
+  "scripts": {
+    "start": "node douyin-followers.js"
+  },
+  "keywords": [
+    "douyin",
+    "automation",
+    "agent-device"
+  ],
+  "author": "",
+  "license": "MIT"
+}
