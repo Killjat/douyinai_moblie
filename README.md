@@ -69,11 +69,14 @@ python3 run.py scan-feed --count 10 --output output/feed.json
 
 ### 抖音直播间采集 (LiveFeature)
 
-进入直播间后，采集当前直播的基础数据和实时弹幕：
+进入直播间后，采集当前直播的完整数据：
 
 - 主播昵称
-- 在线人数
+- 本场点赞数
+- 当前在线人数
+- 在线观众列表（右上角前3名）
 - 实时弹幕（用户名 + 内容）
+- 礼物通知（自动从弹幕流中识别）
 
 > 使用前需先在手机上进入直播间，然后运行命令。
 
@@ -84,20 +87,24 @@ python3 run.py live --output output/live.json
 
 ```json
 {
-  "anchor_name": "JT-001",
-  "title": "",
-  "viewer_count": "11",
-  "category": "",
-  "rank": [],
+  "anchor_name": "Sophia123",
+  "total_likes": "123275",
+  "viewer_count": "17",
+  "top_viewers": [". Y", "动情✘", "自然醒"],
   "danmaku": [
-    { "user": "冰美式🧊", "content": "哼，划就划" },
-    { "user": "李永恩✨✨", "content": "@冰美式🧊 划三八线" }
+    { "user": "冰美式🧊", "content": "哼，划就划", "is_gift": false },
+    { "user": "七月🎊", "content": "@扫地僧 那你直接过", "is_gift": false }
   ],
-  "collected_at": "2026-03-27T06:01:02Z"
+  "gifts": [
+    { "user": "李永恩✨✨", "content": "送了玫瑰 x1", "is_gift": true }
+  ],
+  "title": "",
+  "category": "",
+  "collected_at": "2026-03-27T08:38:06Z"
 }
 ```
 
-> `title`、`category`、`rank`（人气榜）正在开发中，详见 `apps/douyin/features/live.md`。
+> `title`、`category` 待实现，详见 `apps/douyin/features/live.md`。
 
 ### 其他功能
 
@@ -117,7 +124,9 @@ ai_mobile_control/
 │       ├── client.py          # 基础设施：设备连接、页面等待、导航
 │       └── features/
 │           ├── profile.py     # 个人主页功能
-│           └── feed.py        # 推荐视频流功能
+│           ├── feed.py        # 推荐视频流功能
+│           ├── live.py        # 直播间采集功能
+│           └── live.md        # 直播间需求文档 & TODO
 ├── core/
 │   ├── adb_manager.py         # ADB 管理器
 │   ├── device_controller.py   # agent-device 控制器
@@ -269,8 +278,8 @@ DEEPSEEK_MODEL=deepseek-chat
 
 - [ ] 搜索功能
 - [ ] 私信功能
-- [x] 直播间基础信息采集（主播昵称、在线人数、弹幕）
-- [ ] 直播间标题 / 分类 / 人气榜（调研中，见 `apps/douyin/features/live.md`）
+- [x] 直播间采集（主播昵称、本场点赞、在线人数、观众列表、弹幕、礼物通知）
+- [ ] 直播间标题 / 分类（调研中，见 `apps/douyin/features/live.md`）
 - [ ] 多设备并发控制
 - [ ] 更多平台支持（微信、小红书等）
 

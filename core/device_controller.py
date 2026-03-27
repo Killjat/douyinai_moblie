@@ -80,7 +80,7 @@ class DeviceController:
             cmd,
             capture_output=True,
             text=True,
-            timeout=20  # 增加超时时间到 20 秒
+            timeout=40  # 增加超时时间到 40 秒，直播间节点多
         )
 
         logger.debug(f"命令返回码: {result.returncode}")
