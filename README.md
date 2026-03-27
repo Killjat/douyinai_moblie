@@ -1,259 +1,281 @@
 # AI Mobile Control - 手机自动化控制工具
 
-基于 agent-device 的 Python 工程化实现,支持 Android/iOS 设备的自动化控制。
+基于 `agent-device` + `ADB` 的 Python 工程化实现，支持 Android 设备的自动化控制。当前专注于抖音平台，提供个人主页数据采集、推荐内容扫描等功能，架构设计支持快速扩展到更多应用。
+
+---
 
 ## 功能特性
 
-- **设备管理**: 自动检测和连接设备
-- **应用控制**: 打开、关闭应用
-- **UI 自动化**: 基于可访问性树的元素查找和操作
-- **抖音自动化**: 粉丝信息获取、个人主页编辑等
-- **日志系统**: 详细的操作日志记录
+### 抖音个人主页 (ProfileFeature)
+
+自动导航到抖音个人主页，提取账号的完整数据：
+
+- 账号昵称
+- 粉丝数 / 关注数 / 获赞数
+- 粉丝列表
+- 编辑个人简介
+
+```bash
+python3 run.py profile
+```
+
+```json
+{
+  "name": "cyberstroll跨境电商",
+  "bio": "",
+  "followers": 2,
+  "following": 11,
+  "likes": 0
+}
+```
+
+### 抖音推荐视频扫描 (FeedFeature)
+
+自动刷取推荐视频流，逐条采集每个视频的结构化数据：
+
+- 作者昵称 / @ 句柄
+- 视频标题 / 描述
+- 点赞数 / 评论数 / 分享数 / 背景音乐
+- 评论区内容（用户名 + 评论文本）
+
+```bash
+# 扫描 5 个视频（默认）
+python3 run.py scan-feed
+
+# 扫描 10 个并保存到文件
+python3 run.py scan-feed --count 10 --output output/feed.json
+```
+
+```json
+[
+  {
+    "author": "方明泉摄影",
+    "author_handle": "@方明泉摄影",
+    "title": "西大街30年巨变...",
+    "likes": "524",
+    "comment_count": "156",
+    "shares": "26",
+    "music": "@方明泉摄影创作的原声",
+    "comments": [
+      {
+        "user": "小薛哥哥",
+        "content": "90年的。招工进入北门清管所工作过3个多月...",
+        "total_in_video": "156条评论"
+      }
+    ]
+  }
+]
+```
+
+### 抖音直播间采集 (LiveFeature)
+
+进入直播间后，采集当前直播的基础数据和实时弹幕：
+
+- 主播昵称
+- 在线人数
+- 实时弹幕（用户名 + 内容）
+
+> 使用前需先在手机上进入直播间，然后运行命令。
+
+```bash
+python3 run.py live
+python3 run.py live --output output/live.json
+```
+
+```json
+{
+  "anchor_name": "JT-001",
+  "title": "",
+  "viewer_count": "11",
+  "category": "",
+  "rank": [],
+  "danmaku": [
+    { "user": "冰美式🧊", "content": "哼，划就划" },
+    { "user": "李永恩✨✨", "content": "@冰美式🧊 划三八线" }
+  ],
+  "collected_at": "2026-03-27T06:01:02Z"
+}
+```
+
+> `title`、`category`、`rank`（人气榜）正在开发中，详见 `apps/douyin/features/live.md`。
+
+### 其他功能
+
+- 设备管理：自动检测和连接 Android 设备
+- 操作录制 / 回放：录制手机操作并生成可执行 Python 代码
+- AI 智能代理：接入 DeepSeek，通过自然语言描述任务自动执行
+- 日志系统：完整的操作日志记录
+
+---
 
 ## 项目结构
 
 ```
-ai_moblie_control/
-├── ai_mobile_control/           # 主包
-│   └── __init__.py
-├── apps/                       # 应用模块
-│   └── douyin/                 # 抖音应用
-│       ├── __init__.py
-│       └── client.py           # 抖音客户端
-├── cli/                        # 命令行接口
-│   ├── __init__.py
-│   ├── main.py                 # 主入口
-│   └── commands.py             # CLI 命令
-├── config/                     # 配置模块
-│   ├── __init__.py
-│   └── settings.py             # 配置文件
-├── core/                       # 核心模块
-│   ├── __init__.py
-│   ├── adb_manager.py          # ADB 管理器
-│   └── device_controller.py    # 设备控制器
-├── examples/                   # 使用示例
-│   ├── example_usage.py        # 示例代码
-│   ├── test_profile.py         # 测试个人主页
-│   └── test_click_and_profile.py  # 测试点击
-├── output/                     # 输出目录
-├── logs/                       # 日志目录
-├── screenshots/                # 截图目录
-├── requirements.txt            # Python 依赖
-├── run.py                      # 运行入口
-├── PROJECT_STRUCTURE.md         # 项目结构文档
-└── README.md                   # 项目文档
+ai_mobile_control/
+├── apps/
+│   └── douyin/
+│       ├── client.py          # 基础设施：设备连接、页面等待、导航
+│       └── features/
+│           ├── profile.py     # 个人主页功能
+│           └── feed.py        # 推荐视频流功能
+├── core/
+│   ├── adb_manager.py         # ADB 管理器
+│   ├── device_controller.py   # agent-device 控制器
+│   └── executor.py            # AI 执行器
+├── ai_brain/
+│   ├── deepseek_client.py     # DeepSeek AI 客户端
+│   └── ai_agent.py            # AI 智能代理
+├── cli/
+│   ├── commands.py            # CLI 命令
+│   └── ai_commands.py         # AI 相关命令
+├── config/
+│   └── settings.py            # 配置文件
+├── .env                       # 环境变量（API Key 等）
+└── run.py                     # 入口
 ```
+
+---
 
 ## 安装
 
 ### 前置要求
 
-1. Python 3.8+
-2. Node.js 16+ (用于安装 agent-device)
-3. Android SDK 或 iOS 开发环境
-4. 已连接并开启 USB 调试的设备
+- Python 3.8+
+- Node.js 16+
+- Android 设备，已开启 USB 调试
 
-### 安装步骤
+### 步骤
 
-1. 安装 agent-device:
 ```bash
+# 1. 安装 agent-device
 npm install -g agent-device
-```
 
-2. 安装 Python 依赖:
-```bash
+# 2. 安装 Python 依赖
 pip install -r requirements.txt
-```
 
-3. 连接设备并开启 USB 调试 (Android) 或信任电脑 (iOS)
+# 3. 配置环境变量（可选，用于 AI 功能）
+cp .env.example .env
+# 编辑 .env，填入 DEEPSEEK_API_KEY
 
-4. 验证设备连接:
-```bash
+# 4. 验证设备连接
 python3 run.py check
 ```
+
+---
 
 ## 使用方法
 
-### 命令行工具
+### CLI 命令
 
-#### 1. 检查设备连接
 ```bash
+# 检查设备连接
 python3 run.py check
-```
 
-#### 2. 打开抖音
-```bash
+# 打开抖音
 python3 run.py open-douyin
-```
 
-#### 3. 获取粉丝信息
-```bash
-python3 run.py followers
-```
-
-输出到文件:
-```bash
-python3 run.py followers --output output/followers.json
-```
-
-#### 4. 获取个人主页信息
-```bash
+# 获取个人主页信息
 python3 run.py profile
-```
 
-#### 5. 编辑个人简介
-```bash
-python3 run.py edit-bio
-```
+# 获取粉丝信息
+python3 run.py followers
+python3 run.py followers --output output/followers.json
 
-使用自定义简介:
-```bash
-python3 run.py edit-bio --bio "这是我的自定义简介"
-```
+# 编辑个人简介
+python3 run.py edit-bio --bio "新的简介内容"
 
-#### 6. 获取屏幕快照
-```bash
-python3 run.py snapshot
+# 扫描推荐视频流
+python3 run.py scan-feed --count 5
+python3 run.py scan-feed --count 10 --output output/feed.json
+
+# 直播间采集（需先在手机上进入直播间）
+python3 run.py live
+python3 run.py live --output output/live.json
+
+# AI 智能模式
+python3 run.py ai execute "获取抖音个人主页信息"
+python3 run.py ai interactive
 ```
 
 ### Python API
 
 ```python
 from apps.douyin.client import DouyinClient
+from apps.douyin.features import ProfileFeature, FeedFeature
 
-# 创建客户端
 client = DouyinClient()
 
-# 打开抖音
-client.open_douyin()
+# 个人主页
+profile = ProfileFeature(client)
+info = profile.get_info()
+followers = profile.get_followers_list()
+profile.edit_bio("新的简介")
 
-# 获取粉丝信息
-count = client.get_follower_count()
-print(f"粉丝: {count['followers']}, 关注: {count['following']}")
+# 推荐视频流
+feed = FeedFeature(client)
+videos = feed.scan(count=10)
 
-# 获取个人主页信息
-info = client.get_profile_info()
-print(info)
-
-# 编辑简介
-client.edit_profile_bio("新的简介内容")
+# 直播间（需先在手机上进入直播间）
+from apps.douyin.features import LiveFeature
+live = LiveFeature(client)
+info = live.collect()
 ```
 
-### 核心模块
+---
 
-#### ADBManager
+## 架构设计
+
+`DouyinClient` 只负责基础设施（设备连接、页面等待、导航、操作后回到推荐页），业务逻辑全部在 `features/` 下按功能模块拆分。新增功能只需在 `features/` 下添加新文件，注入 `client` 即可。
 
 ```python
-from core.adb_manager import ADBManager
+# 添加新功能示例：apps/douyin/features/search.py
+from apps.douyin.client import DouyinClient
 
-adb = ADBManager()
-adb.tap(500, 500)              # 点击
-adb.input_text("hello")        # 输入文本
-adb.press_key("KEYCODE_HOME")  # 按键
-adb.swipe(500, 2000, 500, 1000)  # 滑动
+class SearchFeature:
+    def __init__(self, client: DouyinClient):
+        self.client = client
+
+    def search(self, keyword: str):
+        self.client.ensure_open()
+        # 实现搜索逻辑...
+        self.client.return_to_feed()
 ```
 
-#### DeviceController
+---
 
-```python
-from core.device_controller import DeviceController
+## 配置
 
-device = DeviceController()
-snapshot = device.get_snapshot()  # 获取快照
-device.press("@e123")             # 点击元素
-device.press_text("确定")         # 通过文本点击
-element = device.find_element_by_text("粉丝")  # 查找元素
+`config/settings.py` 和 `.env`：
+
+```env
+DEEPSEEK_API_KEY=your-api-key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
 ```
 
-## 配置说明
-
-配置文件位于 `config/settings.py`:
-
-```python
-class Settings:
-    # CyberStroll 简介
-    CYBERSTROLL_BIO = "CyberStroll 跨境电商 - 专注于为全球消费者提供优质商品和购物体验"
-
-    # 超时配置
-    SNAPSHOT_TIMEOUT = 10
-    WAIT_TIMEOUT = 5
-```
-
-## 日志
-
-日志文件保存在 `logs/` 目录,包含:
-- 控制台输出: INFO 级别
-- 文件日志: DEBUG 级别,自动轮转和清理
+---
 
 ## 常见问题
 
-### 1. 设备未连接
+**设备未连接**：确认 USB 调试已开启，手机上点击"允许 USB 调试"授权。
 
-确保:
-- 设备已通过 USB 连接
-- Android 设备已开启 USB 调试
-- iOS 设备已信任电脑
+**agent-device 命令失败**：运行 `agent-device devices` 确认设备在列表中。
 
-### 2. agent-device 命令失败
+**中文输入问题**：ADB 不支持直接输入中文，需安装 ADB Keyboard 输入法。
 
-检查:
-```bash
-agent-device devices
-```
+---
 
-确保设备列表中包含你的设备。
+## 开发计划
 
-### 3. 中文输入问题
+- [ ] 搜索功能
+- [ ] 私信功能
+- [x] 直播间基础信息采集（主播昵称、在线人数、弹幕）
+- [ ] 直播间标题 / 分类 / 人气榜（调研中，见 `apps/douyin/features/live.md`）
+- [ ] 多设备并发控制
+- [ ] 更多平台支持（微信、小红书等）
 
-ADB 无法直接输入中文。需要使用特殊方法:
-1. 使用英文简介 (完全自动化)
-2. 安装 ADB Keyboard 输入法 (一次设置,后续自动化)
+---
 
-## 开发指南
+## License
 
-### 添加新应用
-
-在 `apps/` 目录下创建新的应用模块:
-
-```python
-# apps/myapp/client.py
-from core.device_controller import DeviceController
-from loguru import logger
-
-class MyAppClient:
-    def __init__(self, device_id=None):
-        self.device = DeviceController(device_id)
-
-    def do_something(self):
-        # 实现你的自动化逻辑
-        pass
-```
-
-### 添加新命令
-
-在 `cli/commands.py` 中添加:
-
-```python
-@cli.command()
-@click.option("--device", "-d", help="设备 ID")
-def my_command(device):
-    """我的命令描述"""
-    client = DouyinClient(device)
-    # 实现命令逻辑
-```
-
-## 注意事项
-
-1. 确保手机已连接并开启 USB 调试
-2. 确保 agent-device 已安装并配置好
-3. 中文输入受 ADB 限制,需要特殊处理
-4. 操作过程中请保持屏幕常亮
-
-## 许可证
-
-MIT License
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request!
-# douyinai_moblie
+MIT

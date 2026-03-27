@@ -44,6 +44,8 @@ logs/
 # 输出文件
 output/
 screenshots/*.png
+recordings/*.json
+recordings/*.py
 
 # 临时文件
 *.tmp
