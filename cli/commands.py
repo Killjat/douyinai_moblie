@@ -41,6 +41,38 @@ cli.add_command(ai)
 
 @cli.command()
 @click.option("--device", "-d", help="设备 ID")
+@click.option("--uri", help="Neo4j URI，默认读取 .env")
+def export_neo4j(device, uri):
+    """采集个人主页 + 推荐视频，写入 Neo4j 图谱"""
+    from apps.douyin.features import ProfileFeature, FeedFeature
+    from apps.douyin.neo4j_exporter import Neo4jExporter
+
+    client = DouyinClient(device)
+    exporter = Neo4jExporter(uri=uri)
+
+    if not exporter.connect():
+        logger.error("Neo4j 连接失败，请检查配置")
+        return
+
+    with exporter:
+        # 个人主页
+        logger.info("采集个人主页...")
+        profile = ProfileFeature(client).get_info()
+        if profile:
+            exporter.export_profile(profile)
+
+        # 推荐视频
+        logger.info("采集推荐视频...")
+        videos = FeedFeature(client).scan(count=5)
+        exported = exporter.export_feed(videos)
+
+        stats = exporter.stats()
+        logger.success(f"导出完成: {stats}")
+        click.echo(json.dumps(stats, ensure_ascii=False, indent=2))
+
+
+@cli.command()
+@click.option("--device", "-d", help="设备 ID")
 def check(device):
     """检查设备连接状态"""
     from core.adb_manager import ADBManager

@@ -37,6 +37,11 @@ class Settings:
     DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
+    # Neo4j 配置（与 ai_social_relationship 共用同一图谱）
+    NEO4J_URI = os.getenv("NEO4J_URI", "bolt://47.111.28.162:7687")
+    NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+    NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j@2026")
+
     def __init__(self):
         """初始化并创建必要的目录"""
         self.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

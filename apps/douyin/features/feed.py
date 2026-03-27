@@ -52,18 +52,33 @@ class FeedFeature:
     # ------------------------------------------------------------------
 
     def _parse_video(self, nodes: List[Dict]) -> Dict[str, Any]:
+        """
+        字段命名与 ai_social_relationship 的 Neo4j Work 节点对齐：
+          nickname      ← 视频作者（对齐 User.nickname）
+          author_handle ← @句柄
+          type          ← 视频类型（视频/图文）
+          title         ← 视频标题
+          likes         ← 点赞数（对齐 Work.likes）
+          comment_count ← 评论数
+          shares        ← 分享数
+          music         ← 背景音乐
+        注：work_id / url 手机端无法获取，需 Web 端补全
+        """
         info = {
-            "author": "", "author_handle": "", "title": "",
+            "nickname": "", "author_handle": "",
+            "type": "视频",   # 默认视频，图文时会覆盖
+            "title": "",
             "likes": "", "comment_count": "", "shares": "", "music": "",
         }
         for node in nodes:
             label = node.get("label", "").strip()
+            identifier = node.get("identifier", "")
             if not label:
                 continue
 
             if label.startswith("@") and node.get("hittable"):
                 info["author_handle"] = label
-                info["author"] = label.lstrip("@")
+                info["nickname"] = label.lstrip("@")
 
             elif "展开" in label and len(label) > 10:
                 info["title"] = label.replace(" 展开>", "").replace(" 展开", "").strip()
@@ -85,6 +100,10 @@ class FeedFeature:
 
             elif label.startswith("音乐，"):
                 info["music"] = label.replace("音乐，", "").replace("，按钮", "").strip()
+
+            # 图文类型识别
+            elif "图片" in label and "按钮" in label and "图片1" in label:
+                info["type"] = "图文"
 
         return info
 

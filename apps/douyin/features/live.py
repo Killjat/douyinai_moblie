@@ -35,14 +35,14 @@ class DanmakuItem:
 
 @dataclass
 class LiveInfo:
-    anchor_name: str = ""
+    nickname: str = ""                                       # 主播昵称（对齐 User.nickname）
     total_likes: str = ""                                    # 本场点赞数，如 "1.1万"
     viewer_count: str = ""                                   # 当前在线人数
     top_viewers: List[str] = field(default_factory=list)    # 右上角在线观众昵称（前3名）
     danmaku: List[DanmakuItem] = field(default_factory=list)
-    gifts: List[DanmakuItem] = field(default_factory=list)  # 礼物通知（从弹幕中提取）
-    title: str = ""             # 待实现，见 live.md TODO
-    category: str = ""          # 待实现，见 live.md TODO
+    gifts: List[DanmakuItem] = field(default_factory=list)
+    title: str = ""
+    category: str = ""
     collected_at: str = ""
 
 
@@ -93,8 +93,8 @@ class LiveFeature:
                 continue
 
             # 主播昵称
-            if "user_name" in identifier and not info.anchor_name:
-                info.anchor_name = label
+            if "user_name" in identifier and not info.nickname:
+                info.nickname = label
                 logger.info(f"主播: {label}")
 
             # 本场点赞（格式："JT-0011.2万本场点赞"，resource-id: auh）
@@ -130,13 +130,13 @@ class LiveFeature:
                     else:
                         info.danmaku.append(dm)
 
-        if not info.anchor_name:
+        if not info.nickname:
             logger.warning("未找到主播昵称")
         if not info.viewer_count:
             logger.warning("未找到在线人数")
 
         logger.success(
-            f"采集完成: 主播={info.anchor_name}, 点赞={info.total_likes}, "
+            f"采集完成: 主播={info.nickname}, 点赞={info.total_likes}, "
             f"在线={info.viewer_count}, 观众={len(info.top_viewers)}人, "
             f"弹幕={len(info.danmaku)}条, 礼物={len(info.gifts)}条"
         )

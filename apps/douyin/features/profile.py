@@ -31,7 +31,7 @@ class ProfileFeature:
     def get_follower_count(self) -> Dict[str, int]:
         """获取粉丝和关注数量"""
         info = self.get_info()
-        return {"followers": info.get("followers", 0), "following": info.get("following", 0)}
+        return {"fans": info.get("fans", 0), "following": info.get("following", 0)}
 
     def get_followers_list(self) -> List[Dict[str, Any]]:
         """获取粉丝列表"""
@@ -100,24 +100,42 @@ class ProfileFeature:
     # ------------------------------------------------------------------
 
     def _parse(self, nodes: List[Dict]) -> Dict[str, Any]:
-        info = {"name": "", "bio": "", "followers": 0, "following": 0, "likes": 0}
+        """
+        字段命名与 ai_social_relationship 的 Neo4j User 节点对齐：
+          nickname     ← 原 name
+          douyin_id    ← 抖音号（新增采集）
+          bio          ← 不变
+          fans         ← 原 followers
+          following    ← 不变
+          total_likes  ← 原 likes
+        """
+        info = {
+            "nickname": "",
+            "douyin_id": "",
+            "bio": "",
+            "fans": 0,
+            "following": 0,
+            "total_likes": 0,
+        }
 
         for i, node in enumerate(nodes):
             label = node.get("label", "").strip()
             if not label:
                 continue
 
-            if label.startswith("抖音号：") and not info["name"]:
+            # 昵称：抖音号节点往前找
+            if label.startswith("抖音号：") and not info["nickname"]:
+                info["douyin_id"] = label.replace("抖音号：", "").strip()
                 for j in range(i - 1, max(i - 15, -1), -1):
                     prev = nodes[j].get("label", "").strip()
                     if prev and "切换" not in prev and "头像" not in prev:
-                        info["name"] = prev
+                        info["nickname"] = prev
                         break
 
             elif label == "粉丝" and i > 0:
                 num = nodes[i - 1].get("label", "").strip()
                 if num.isdigit():
-                    info["followers"] = int(num)
+                    info["fans"] = int(num)
 
             elif label == "关注" and i > 0:
                 num = nodes[i - 1].get("label", "").strip()
@@ -127,7 +145,7 @@ class ProfileFeature:
             elif label == "获赞" and i > 0:
                 num = nodes[i - 1].get("label", "").strip()
                 if num.isdigit():
-                    info["likes"] = int(num)
+                    info["total_likes"] = int(num)
 
         logger.info(f"个人主页: {info}")
         return info
