@@ -72,6 +72,56 @@ def export_neo4j(device, uri):
 
 
 @cli.command()
+@click.option("--nickname", "-n", help="按作者昵称查询")
+@click.option("--title", "-t", help="按标题关键词查询")
+def related_works(nickname, title):
+    """查询两端都采集到的同一视频（web + mobile 跨端关联）"""
+    from apps.douyin.neo4j_exporter import Neo4jExporter
+    exporter = Neo4jExporter()
+    if not exporter.connect():
+        logger.error("Neo4j 连接失败")
+        return
+    with exporter:
+        results = exporter.find_related_works(nickname=nickname, title=title)
+        logger.info(f"找到 {len(results)} 条跨端匹配")
+        click.echo(json.dumps(results, ensure_ascii=False, indent=2))
+
+
+@cli.command()
+@click.argument("keyword")
+@click.option("--count", "-n", default=10, show_default=True, help="采集数量")
+@click.option("--topic", is_flag=True, default=False, help="进入「话题」Tab 并采集该话题下的作品")
+@click.option("--max-comments", default=100, show_default=True, help="每条作品最多采集评论数（上限 200）")
+@click.option("--output", "-o", help="输出文件路径")
+@click.option("--neo4j", is_flag=True, default=False, help="同时写入 Neo4j")
+@click.option("--device", "-d", help="设备 ID")
+def search(keyword, count, topic, max_comments, output, neo4j, device):
+    """搜索关键词，采集相关视频；加 --topic 时进入匹配的话题页再采集作品"""
+    from apps.douyin.features import SearchFeature
+    client = DouyinClient(device)
+    results = SearchFeature(client).search(
+        keyword, count=count, topic=topic, max_comments=max_comments
+    )
+
+    if neo4j:
+        from apps.douyin.neo4j_exporter import Neo4jExporter
+        exporter = Neo4jExporter()
+        if exporter.connect():
+            with exporter:
+                exported = exporter.export_feed(results)
+                logger.success(f"已写入 Neo4j: {exported} 条")
+
+    if output:
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(results, f, ensure_ascii=False, indent=2)
+        logger.success(f"结果已保存到: {output}")
+    else:
+        click.echo(json.dumps(results, ensure_ascii=False, indent=2))
+
+
+@cli.command()
 @click.option("--device", "-d", help="设备 ID")
 def check(device):
     """检查设备连接状态"""
@@ -199,11 +249,12 @@ def edit_bio(device, bio):
 def snapshot(device):
     """获取当前屏幕快照"""
     client = DouyinClient(device)
-    snapshot = client.get_snapshot()
-    analysis = client.device.analyze_snapshot()
-
-    click.echo(f"总节点数: {analysis['total_nodes']}")
-    click.echo(f"文本列表: {analysis['texts'][:20]}...")
+    nodes = client.get_nodes()
+    
+    # 简单分析
+    texts = [node.get("label", "").strip() for node in nodes if node.get("label", "").strip()]
+    click.echo(f"总节点数: {len(nodes)}")
+    click.echo(f"文本列表: {texts[:20]}...")
 
     # 保存快照
     from datetime import datetime
@@ -212,7 +263,7 @@ def snapshot(device):
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(snapshot, f, ensure_ascii=False, indent=2)
+        json.dump({"nodes": nodes}, f, ensure_ascii=False, indent=2)
 
     logger.success(f"快照已保存到: {output_path}")
 

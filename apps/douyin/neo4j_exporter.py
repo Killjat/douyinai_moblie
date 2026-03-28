@@ -212,3 +212,49 @@ class Neo4jExporter:
             rels = s.run("MATCH ()-[r:PUBLISHED]->() RETURN count(r) AS n").single()["n"]
             mobile = s.run("MATCH (n) WHERE n.source='mobile' RETURN count(n) AS n").single()["n"]
         return {"users": users, "works": works, "published": rels, "mobile_nodes": mobile}
+
+    # ------------------------------------------------------------------
+    # 跨端关联查询
+    # ------------------------------------------------------------------
+
+    def find_related_works(self, nickname: str = None, title: str = None) -> List[Dict]:
+        """
+        查找两端都采集到的同一视频（通过 nickname + title 软匹配）。
+        返回 web 端和 mobile 端的节点对。
+
+        用法：
+            # 查某作者的所有跨端视频
+            exporter.find_related_works(nickname="方明泉摄影")
+
+            # 查特定标题
+            exporter.find_related_works(title="西大街30年巨变")
+        """
+        conditions = []
+        params = {}
+        if nickname:
+            conditions.append("u1.nickname = $nickname AND u2.nickname = $nickname")
+            params["nickname"] = nickname
+        if title:
+            conditions.append("w1.title CONTAINS $title AND w2.title CONTAINS $title")
+            params["title"] = title
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        query = f"""
+            MATCH (u1:User)-[:PUBLISHED]->(w1:Work {{source: 'web'}}),
+                  (u2:User)-[:PUBLISHED]->(w2:Work {{source: 'mobile'}})
+            {where}
+            AND w1.title = w2.title
+            RETURN u1.nickname AS nickname,
+                   w1.work_id  AS web_work_id,
+                   w1.title    AS title,
+                   w1.likes    AS web_likes,
+                   w1.url      AS url,
+                   w2.work_id  AS mobile_work_id,
+                   w2.likes    AS mobile_likes,
+                   w2.comment_count AS comment_count,
+                   w2.shares   AS shares
+        """
+        with self.driver.session() as s:
+            result = s.run(query, **params)
+            return [dict(r) for r in result]

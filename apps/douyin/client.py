@@ -43,15 +43,22 @@ class DouyinClient:
         """获取当前页面所有节点"""
         return self.device.get_snapshot().get("nodes", [])
 
-    def wait_for_page(self, page_check: Callable[[List], bool], timeout: int = 10, desc: str = "") -> List[Dict]:
-        """轮询快照直到页面特征匹配，超时抛 TimeoutError"""
+    def wait_for_page(
+        self,
+        page_check: Callable[[List], bool],
+        timeout: int = 10,
+        desc: str = "",
+        poll_interval: float = 1.0,
+    ) -> List[Dict]:
+        """轮询快照直到页面特征匹配，超时抛 TimeoutError。poll_interval 过小会增加 snapshot 频率。"""
         deadline = time.time() + timeout
+        poll_interval = max(0.25, float(poll_interval))
         while time.time() < deadline:
             nodes = self.get_nodes()
             if page_check(nodes):
                 logger.info(f"页面就绪: {desc}")
                 return nodes
-            time.sleep(1)
+            time.sleep(poll_interval)
         raise TimeoutError(f"等待页面超时: {desc}")
 
     # ------------------------------------------------------------------
