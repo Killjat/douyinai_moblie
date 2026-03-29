@@ -138,6 +138,7 @@ class Neo4jExporter:
 
         try:
             with self.driver.session() as s:
+                # 写入 Work 节点和 PUBLISHED 关系
                 s.run("""
                     MERGE (w:Work {work_id: $work_id})
                     SET w.type          = $type,
@@ -159,6 +160,36 @@ class Neo4jExporter:
                     shares=video.get("shares", ""),
                     nickname=nickname,
                 )
+                
+                # 处理评论数据
+                comments = video.get("comments", [])
+                if comments:
+                    for comment in comments:
+                        comment_user = comment.get("user", "").strip()
+                        comment_content = comment.get("content", "").strip()
+                        if comment_user and comment_content:
+                            # 生成评论的唯一 ID
+                            comment_raw = f"{work_id}:{comment_user}:{comment_content}"
+                            comment_id = "comment_" + hashlib.md5(comment_raw.encode()).hexdigest()[:12]
+                            
+                            # 写入 Comment 节点和相关关系
+                            s.run("""
+                                MERGE (c:Comment {comment_id: $comment_id})
+                                SET c.content     = $content,
+                                    c.source       = 'mobile',
+                                    c.updated_at   = timestamp()
+                                WITH c
+                                MATCH (w:Work {work_id: $work_id})
+                                MERGE (w)-[:HAS_COMMENT]->(c)
+                                WITH c
+                                MERGE (u:User {nickname: $comment_user})
+                                MERGE (u)-[:COMMENTED]->(c)
+                            """,
+                                comment_id=comment_id,
+                                content=comment_content,
+                                work_id=work_id,
+                                comment_user=comment_user,
+                            )
             return True
         except Exception as e:
             logger.error(f"_export_work 失败: {e}")
@@ -209,9 +240,11 @@ class Neo4jExporter:
         with self.driver.session() as s:
             users = s.run("MATCH (u:User) RETURN count(u) AS n").single()["n"]
             works = s.run("MATCH (w:Work) RETURN count(w) AS n").single()["n"]
+            comments = s.run("MATCH (c:Comment) RETURN count(c) AS n").single()["n"]
             rels = s.run("MATCH ()-[r:PUBLISHED]->() RETURN count(r) AS n").single()["n"]
+            comment_rels = s.run("MATCH ()-[r:HAS_COMMENT|COMMENTED]->() RETURN count(r) AS n").single()["n"]
             mobile = s.run("MATCH (n) WHERE n.source='mobile' RETURN count(n) AS n").single()["n"]
-        return {"users": users, "works": works, "published": rels, "mobile_nodes": mobile}
+        return {"users": users, "works": works, "comments": comments, "published": rels, "comment_relations": comment_rels, "mobile_nodes": mobile}
 
     # ------------------------------------------------------------------
     # 跨端关联查询

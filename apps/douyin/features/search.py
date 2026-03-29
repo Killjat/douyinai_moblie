@@ -5,6 +5,7 @@
 - 支持滚动翻页，持续采集
 """
 import re
+import subprocess
 import time
 from typing import Dict, List, Any, Optional, Tuple
 from loguru import logger
@@ -32,6 +33,7 @@ def _looks_like_bad_author_nickname(text: str) -> bool:
 
 def _is_search_results_page(nodes: List[Dict]) -> bool:
     """搜索结果页：顶部 Tab 或筛选条（不同版本文案略有差异）"""
+    # 1. 检查是否有搜索相关的 Tab
     tabs = {
         "综合", "视频", "用户", "直播", "话题", "商品", "图文",
         "全部", "经验", "团购", "店铺",
@@ -39,10 +41,19 @@ def _is_search_results_page(nodes: List[Dict]) -> bool:
     for n in nodes:
         if n.get("label", "").strip() in tabs:
             return True
-    # 无 Tab 文案时：常见「筛选」+ 多结果列表
+    
+    # 2. 检查是否有搜索相关的特征（不依赖特定关键词）
+    # 这里不再检查特定关键词，因为关键词是动态的
+    
+    # 3. 无 Tab 文案时：常见「筛选」+ 多结果列表
     joined = "".join((n.get("label") or "") for n in nodes[:250])
     if "筛选" in joined and len(joined) > 80:
         return True
+    
+    # 4. 检查是否有搜索结果相关的文本
+    if any(keyword in joined for keyword in ["结果", "找到", "条视频", "个作品"]):
+        return True
+    
     return False
 
 
@@ -61,21 +72,27 @@ class SearchFeature:
         count: int = 10,
         topic: bool = False,
         max_comments: int = 100,
+        latest: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         搜索关键词，采集前 count 条视频。
-        topic=True：进「话题」Tab 并打开匹配话题，再采话题下的作品。
-
-        每条优先包含：title、likes、comment_count、comments（最多 max_comments 条）、nickname；
-        另有 search_keyword；话题模式另有 topic 字段。
+        latest=True：切到「视频」Tab，按最新发布 + 一天内筛选，采集最新内容。
         """
         self._keyword = keyword
         self._topic_mode = topic
         self._max_comments = max(1, min(max_comments, 200))
         try:
             self.client.ensure_open()
-            if not self._navigate_to_search(keyword):
+            try:
+                feed_nodes = self.client.navigate_to_feed()
+            except Exception as e:
+                logger.error(f"无法导航到推荐页: {e}")
                 return []
+            if not self._navigate_to_search(keyword, feed_nodes):
+                return []
+            if latest:
+                if not self._apply_latest_filter():
+                    logger.warning("筛选失败，继续采集未筛选的结果")
             if topic:
                 if not self._open_topic_page(keyword):
                     logger.error("未能进入话题详情，退回普通搜索结果采集")
@@ -94,103 +111,134 @@ class SearchFeature:
     # 导航
     # ------------------------------------------------------------------
 
-    def _navigate_to_search(self, keyword: str) -> bool:
-        """导航到搜索结果页"""
-        # 先确保在推荐页（搜索按钮在推荐页顶部）
-        try:
-            nodes = self.client.navigate_to_feed()
-        except Exception:
+    # ------------------------------------------------------------------
+    # 页面状态感知
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_page(nodes: List[Dict]) -> str:
+        """
+        感知当前页面类型，返回状态字符串：
+          'search_input'   搜索输入页（有历史记录/猜你想搜）
+          'search_results' 搜索结果页（有综合/视频等 Tab）
+          'feed'           推荐视频流（有推荐按钮）
+          'unknown'        其他
+        """
+        labels = {n.get("label", "").strip() for n in nodes}
+        # 搜索输入页
+        if labels & {"历史记录", "猜你想搜", "大家都在搜"} or \
+                any("填入搜索框" in l or "搜索框" in l for l in labels):
+            return "search_input"
+        # 搜索结果页：有搜索 Tab 栏（综合/用户/话题等）
+        # 注意："视频"和"直播"在推荐页也存在，不能用于判断
+        if labels & {"综合", "用户", "话题", "商品", "图文"}:
+            return "search_results"
+        # 推荐页：底部"首页"和"推荐"按钮同时存在
+        if (any(n.get("label", "").strip() == "首页" for n in nodes) and
+                any("推荐" in n.get("label", "") and "按钮" in n.get("label", "") for n in nodes)):
+            return "feed"
+        return "unknown"
+
+    def _wait_for_state(self, target: str, timeout: int = 20) -> List[Dict]:
+        """轮询直到页面状态匹配 target，返回节点列表。
+        快照失败（空 nodes）时跳过本次判断继续等待。"""
+        import time as _time
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
             nodes = self.client.get_nodes()
-
-        # 找搜索按钮（推荐页右上角）
-        search_btn = None
-        for n in nodes:
-            label = n.get("label", "").strip()
-            if (n.get("hittable") and 
-                (label == "搜索" or "搜索" in label)):
-                search_btn = n
-                logger.info(f"找到搜索按钮: {label}")
-                break
-        
-        if not search_btn:
-            logger.error("未找到搜索按钮，尝试使用坐标点击")
-            # 尝试使用坐标点击搜索按钮（假设在右上角）
-            self.client.adb.tap(900, 100)  # 调整坐标位置
-            time.sleep(2)
-        else:
-            self.client.device.press(search_btn.get("ref"))
-            time.sleep(1.0)
-
-        # 在搜索页找历史记录或输入框
+            if not nodes:
+                logger.debug("快照为空，继续等待...")
+                continue
+            state = self._detect_page(nodes)
+            if state == target:
+                logger.info(f"页面状态: {target}")
+                return nodes
+            logger.debug(f"等待 {target}，当前: {state}")
         nodes = self.client.get_nodes()
+        logger.warning(f"等待 {target} 超时，当前状态: {self._detect_page(nodes)}")
+        return nodes
 
-        # 优先点历史记录：先精确匹配关键词，否则选「包含关键词的最短」一条，避免点到长尾联想
-        candidates: List[tuple] = []
-        for n in nodes:
-            if not n.get("hittable"):
-                continue
-            lab = n.get("label", "").strip()
-            if keyword not in lab:
-                continue
-            if "填入搜索框" in lab or lab in _BAD_AUTHOR_LABELS:
-                continue
-            candidates.append((lab, n))
-        history_node = None
-        if candidates:
-            exact = [(lab, n) for lab, n in candidates if lab == keyword]
-            if exact:
-                history_node = exact[0][1]
-            else:
-                candidates.sort(key=lambda x: len(x[0]))
-                history_node = candidates[0][1]
+    # ------------------------------------------------------------------
+    # 导航
+    # ------------------------------------------------------------------
+
+    def _navigate_to_search(self, keyword: str, nodes: List[Dict] = None) -> bool:
+        """
+        导航到搜索结果页。
+        优先点击历史记录（快），没有则用 ADBKeyboard 直接输入。
+        """
+        if nodes is None:
+            nodes = self.client.get_nodes()
+        if self._detect_page(nodes) != "feed":
+            logger.error(f"当前不在推荐页（{self._detect_page(nodes)}），请先回到推荐页")
+            return False
+        logger.info("✓ 当前在推荐页")
+
+        # 点搜索按钮
+        search_btn = next(
+            (n for n in nodes if n.get("hittable") and n.get("label", "").strip() == "搜索"),
+            None
+        )
+        if not search_btn:
+            logger.error("推荐页未找到搜索按钮")
+            return False
+
+        self.client.device.press(search_btn.get("ref"))
+        nodes = self._wait_for_state("search_input", timeout=20)
+        if self._detect_page(nodes) != "search_input":
+            logger.error("未进入搜索输入页")
+            return False
+
+        # 优先点历史记录
+        nodes = self._expand_history(nodes)
+        history_node = self._find_history_node(nodes, keyword)
         if history_node:
-            logger.info(f"从历史记录点击: {history_node.get('label', '')!r}")
+            logger.info(f"✓ 历史记录命中: {self._history_label(history_node)!r}")
             self.client.device.press(history_node.get("ref"))
-            time.sleep(0.8)
-        else:
-            # 找输入框输入（支持中文）
-            input_node = next(
-                (n for n in nodes if n.get("hittable") and "搜索" in n.get("label", "")),
-                None
-            )
-            if input_node:
-                self.client.device.press(input_node.get("ref"))
-                time.sleep(1)  # 增加等待时间确保输入框激活
-            
-            # 先清除输入框（如果有内容）
-            self.client.adb.press_key("KEYCODE_DEL")
-            time.sleep(0.5)
-            
-            # 使用剪贴板输入中文
-            try:
-                import pyperclip
-                pyperclip.copy(keyword)
-                # 长按输入框调出粘贴选项
-                self.client.adb.tap(500, 200)  # 假设输入框在屏幕上方
-                time.sleep(0.5)
-                self.client.adb.press_key("KEYCODE_PASTE")
-                logger.info(f"已通过剪贴板输入: {keyword}")
-            except ImportError:
-                logger.warning("pyperclip未安装，尝试直接输入（仅支持英文）")
-                self.client.adb.input_text(keyword)
-            
-            # 按回车键搜索
-            self.client.adb.press_key("KEYCODE_ENTER")
-            time.sleep(2)  # 增加等待时间确保搜索结果加载
+            nodes = self._wait_for_state("search_results", timeout=20)
+            if self._detect_page(nodes) == "search_results":
+                logger.info(f"历史记录搜索成功: {keyword}")
+                return True
+            logger.warning("历史记录点击后未进入搜索结果页，改用输入法")
 
-        # 等待搜索结果页（snapshot 较慢，缩短轮询间隔、略放宽页面判定以减少空等）
-        try:
-            self.client.wait_for_page(
-                _is_search_results_page,
-                timeout=12,
-                desc="搜索结果页",
-                poll_interval=0.45,
-            )
-            logger.info(f"搜索结果已加载: {keyword}")
+        # 用 ADBKeyboard 直接输入
+        logger.info(f"使用输入法搜索: {keyword!r}")
+        input_node = next(
+            (n for n in nodes if n.get("hittable") and "搜索" in n.get("label", "")),
+            None
+        )
+        if input_node:
+            self.client.device.press(input_node.get("ref"))
+        else:
+            self.client.adb.tap(540, 80)
+        time.sleep(0.5)
+
+        for _ in range(15):
+            self.client.adb.press_key("KEYCODE_DEL")
+        self.client.adb.input_text_unicode(keyword)
+        time.sleep(0.8)
+
+        nodes = self.client.get_nodes()
+        if not any(keyword in n.get("label", "") for n in nodes):
+            logger.error(f"输入验证失败，未找到 '{keyword}'")
+            return False
+
+        # 点搜索框右边的搜索按钮（第一个 label="搜索" 的节点，在输入框右侧）
+        search_btns = [n for n in nodes if n.get("label", "").strip() == "搜索" and n.get("ref")]
+        if search_btns:
+            self.client.device.press(search_btns[0].get("ref"))  # 第一个是顶部搜索提交按钮
+            logger.info("点击搜索按钮")
+        else:
+            self.client.adb.press_key("KEYCODE_ENTER")
+            logger.info("按回车搜索")
+        nodes = self._wait_for_state("search_results", timeout=20)
+        if self._detect_page(nodes) == "search_results":
+            logger.info(f"输入法搜索成功: {keyword}")
             return True
-        except TimeoutError:
-            logger.error("搜索结果页加载超时，尝试继续执行")
-            return True
+
+        logger.error("搜索结果页加载超时")
+        return True
+
 
     def _ensure_topic_tab_visible(self) -> Optional[Dict]:
         """横向滑动 Tab 栏，直到出现可点的「话题」"""
@@ -242,6 +290,174 @@ class SearchFeature:
         except TimeoutError:
             logger.warning("话题详情页特征未完全匹配，仍尝试列表采集")
         return True
+
+    # ------------------------------------------------------------------
+    # 搜索历史
+    # ------------------------------------------------------------------
+
+    _BAD_HISTORY_LABELS = frozenset({
+        "搜索", "填入搜索框", "搜索框", "历史记录", "猜你想搜", "大家都在搜",
+        "综合", "视频", "用户", "直播", "话题", "商品", "图文",
+        "清空", "删除", "全部删除", "返回", "展开", "收起",
+        "换一换", "反馈", "查看更多历史", "常搜",
+        "猜你想看", "抖音热榜", "同城榜", "直播榜", "团购榜",
+        "语音搜",
+    })
+    _BAD_HISTORY_FRAGMENTS = (
+        "次播放", "喜欢", "评论", "分享", "万", "亿",
+        "，搜索", "，团", "，未选中", "，已选中",
+        "让互联网", "置顶",
+    )
+
+    def _expand_history(self, nodes: List[Dict]) -> List[Dict]:
+        """如果历史记录处于折叠状态，点击展开按钮并刷新节点"""
+        for n in nodes:
+            lab = re.sub(r"[，,]按钮$", "", n.get("label", "").strip())
+            if lab == "展开" and n.get("ref"):
+                logger.info("历史记录已折叠，点击展开")
+                self.client.device.press(n.get("ref"))
+                time.sleep(1.0)
+                return self.client.get_nodes()
+        return nodes
+
+    def _is_history_candidate(self, node: Dict) -> bool:
+        """判断一个节点是否可能是搜索历史条目"""
+        if not node.get("ref"):
+            return False
+        raw = node.get("label", "").strip()
+        lab = re.sub(r"[，,]按钮$", "", raw).strip()
+        if not lab or len(lab) > 40:
+            return False
+        # 含 \ufeff（截断省略号节点）跳过，保留完整文本节点
+        if "\ufeff" in lab:
+            return False
+        # 去掉后缀后仍含逗号，说明是复合描述（如"猜你想看，未选中"），不是历史词
+        if "，" in lab or "," in lab:
+            return False
+        # "xxx搜索" 结尾是"猜你想搜"区域的推荐词，不是历史记录
+        if lab.endswith("搜索"):
+            return False
+        if lab in self._BAD_HISTORY_LABELS:
+            return False
+        if any(f in lab for f in self._BAD_HISTORY_FRAGMENTS):
+            return False
+        if re.match(r"^\d", lab):
+            return False
+        return True
+
+    def _history_label(self, node: Dict) -> str:
+        """返回历史节点清理后的 label（去掉 '，按钮' 后缀）"""
+        lab = node.get("label", "").strip()
+        return re.sub(r"[，,]按钮$", "", lab).strip()
+
+    def get_search_history(self) -> List[str]:
+        """
+        导航到搜索输入页，读取并返回当前可见的搜索历史记录列表。
+        可用于在搜索前检查历史，或直接用历史关键词发起搜索。
+        """
+        try:
+            self.client.ensure_open()
+            nodes = self.client.navigate_to_feed()
+        except Exception:
+            nodes = self.client.get_nodes()
+
+        # 点击搜索按钮进入搜索输入页
+        search_btn = next(
+            (n for n in nodes if n.get("hittable") and "搜索" in n.get("label", "")),
+            None
+        )
+        if search_btn:
+            self.client.device.press(search_btn.get("ref"))
+            time.sleep(1.0)
+        else:
+            self.client.adb.tap(900, 100)
+            time.sleep(1.5)
+
+        nodes = self.client.get_nodes()
+        nodes = self._expand_history(nodes)
+        seen, history = set(), []
+        for n in nodes:
+            if self._is_history_candidate(n):
+                lab = self._history_label(n)
+                if lab not in seen:
+                    seen.add(lab)
+                    history.append(lab)
+        logger.info(f"读取到 {len(history)} 条搜索历史: {history}")
+
+        # 返回推荐页
+        self.client.adb.press_key("KEYCODE_BACK")
+        return history
+
+    def _find_history_node(self, nodes: List[Dict], keyword: str) -> Optional[Dict]:
+        """
+        在搜索输入页节点中查找与 keyword 匹配的历史记录节点。
+        匹配规则（优先级从高到低）：
+          1. 精确匹配
+          2. 去掉 # 前缀后精确匹配
+          3. 节点 label 包含 keyword
+        """
+        exact, hash_match, contains = None, None, None
+        for n in nodes:
+            if not self._is_history_candidate(n):
+                continue
+            lab = self._history_label(n)
+            if lab == keyword:
+                exact = n
+                break
+            if lab.lstrip("#") == keyword and hash_match is None:
+                hash_match = n
+            if keyword in lab and contains is None:
+                contains = n
+
+        result = exact or hash_match or contains
+        if result:
+            logger.info(f"找到历史记录节点: {result.get('label', '')!r}")
+        return result
+
+    def _apply_latest_filter(self) -> bool:
+        """切到视频 Tab → 打开筛选面板 → 点最新发布 → 点底部关闭面板"""
+        nodes = self.client.get_nodes()
+        if self._detect_page(nodes) != "search_results":
+            logger.error(f"不在搜索结果页: {self._detect_page(nodes)}")
+            return False
+
+        video_tab = next((n for n in nodes if n.get("label", "").strip() == "视频"), None)
+        if not video_tab:
+            logger.error("未找到视频 Tab")
+            return False
+        self.client.device.press(video_tab.get("ref"))
+        time.sleep(1.5)
+
+        nodes = self.client.get_nodes()
+        if self._detect_page(nodes) != "search_results":
+            logger.error(f"切视频 Tab 后状态异常: {self._detect_page(nodes)}")
+            return False
+
+        filter_btn = next(
+            (n for n in nodes if "筛选" in n.get("label", "") and n.get("hittable")), None
+        )
+        if not filter_btn:
+            logger.error("未找到筛选按钮")
+            return False
+
+        self.client.device.press(filter_btn.get("ref"))
+        time.sleep(1.0)
+
+        # 点最新发布（通过 getevent 监听实际触摸坐标确定：x=451, y=583）
+        self.client.adb.tap(451, 583)
+        time.sleep(0.5)
+
+        # 点底部导航区域关闭面板（实验验证：y=2300 不会进入视频）
+        self.client.adb.tap(540, 2300)
+        time.sleep(2.0)
+
+        nodes = self._wait_for_state("search_results", timeout=10)
+        if self._detect_page(nodes) == "search_results":
+            logger.info("筛选完成：最新发布")
+            return True
+
+        logger.error(f"筛选后状态异常: {self._detect_page(nodes)}")
+        return False
 
     def _find_topic_tab(self, nodes: List[Dict]) -> Optional[Dict]:
         for n in nodes:
@@ -303,14 +519,38 @@ class SearchFeature:
         max_scrolls = max(count * 5, 40)
 
         logger.info("滚动到搜索结果列表")
-        self.client.adb.swipe(540, 1500, 540, 500, duration=500)
-        time.sleep(2)
+        # 确认当前在搜索结果页，不在则尝试 back 回来
+        nodes = self.client.get_nodes()
+        if self._detect_page(nodes) != "search_results":
+            logger.warning(f"_collect 开始时不在搜索结果页（{self._detect_page(nodes)}），尝试 back")
+            self.client.adb.press_key("KEYCODE_BACK")
+            time.sleep(1.5)
+            nodes = self.client.get_nodes()
+            if self._detect_page(nodes) != "search_results":
+                logger.error("back 后仍不在搜索结果页，放弃采集")
+                return results
+        try:
+            self.client.adb.swipe(540, 1500, 540, 500, duration=500)
+            time.sleep(2)
+        except Exception as e:
+            logger.warning(f"滚动失败: {e}")
+            # 尝试使用其他方式滚动
+            try:
+                self.client.adb.execute(["shell", "input", "keyevent", "KEYCODE_PAGE_DOWN"])
+                time.sleep(2)
+                logger.info("使用 PAGE_DOWN 键滚动")
+            except Exception as e2:
+                logger.warning(f"PAGE_DOWN 键滚动失败: {e2}")
+                # 不滚动，直接尝试解析当前页面
+                logger.info("不滚动，直接尝试解析当前页面")
 
         while len(results) < count and scroll_count < max_scrolls:
             nodes = self.client.get_nodes()
             new_items = self._parse_results(nodes)
             n_before = len(results)
 
+            # 每次只取第一条未处理的视频，处理完 back 回来重新取快照
+            processed_this_round = False
             for item in new_items:
                 t = item.get("title", "").strip()
                 if not t or t in seen_titles:
@@ -328,17 +568,33 @@ class SearchFeature:
                     )
                 else:
                     logger.warning(f"未进全屏，跳过不计入: {t[:40]}")
-                if len(results) >= count:
-                    break
+                processed_this_round = True
+                break  # 处理完一条立即 break，重新取快照获取最新 ref
 
-            if len(results) < count:
+            if len(results) >= count:
+                break
+
+            if not processed_this_round:
+                # 当前页所有条目都处理过了，滚动加载新内容
                 self.client.adb.swipe(540, 1600, 540, 600, duration=400)
                 time.sleep(1.8)
                 scroll_count += 1
-                if len(results) == n_before:
+                stagnant += 1
+                if stagnant >= 8:
+                    logger.warning(f"连续 {stagnant} 次无新作品，停止")
+                    break
+            else:
+                stagnant = 0
+
+            if len(results) < count:
+                if not processed_this_round:
+                    # 当前页所有条目都处理过了，滚动加载新内容
+                    self.client.adb.swipe(540, 1600, 540, 600, duration=400)
+                    time.sleep(1.8)
+                    scroll_count += 1
                     stagnant += 1
-                    if stagnant >= 14:
-                        logger.warning(f"连续 {stagnant} 次滑动无新有效作品，停止（已 {len(results)}/{count} 条）")
+                    if stagnant >= 8:
+                        logger.warning(f"连续 {stagnant} 次无新作品，停止")
                         break
                 else:
                     stagnant = 0
@@ -367,35 +623,93 @@ class SearchFeature:
         if tap and tap.get("ref"):
             logger.info(f"点击列表项: {title[:40]!r}")
             data = self.client.device.press(tap["ref"])
-            time.sleep(3.2 if data else 1.0)
+            time.sleep(2.0 if data else 0.8)
             if not data:
                 logger.warning("ref 点击失败，尝试列表区坐标")
                 for y in (1120, 1020, 1220):
                     self.client.adb.tap(540, y)
-                    time.sleep(2.8)
+                    time.sleep(1.5)
                     cur = self.client.get_nodes()
                     if self._looks_like_immersive_video(cur):
                         return cur
         else:
             logger.info("未匹配标题 ref，点击列表中部")
             self.client.adb.tap(540, 1050)
-            time.sleep(3.5)
+            time.sleep(2.0)
 
         cur = self.client.get_nodes()
         if self._looks_like_immersive_video(cur):
             return cur
-        for _ in range(3):
+        for _ in range(2):  # 减少尝试次数
             self.client.adb.tap(540, 1150)
-            time.sleep(2.2)
+            time.sleep(1.5)
             cur = self.client.get_nodes()
             if self._looks_like_immersive_video(cur):
                 return cur
         return cur
 
+    def _get_video_url(self, nodes: List[Dict]) -> str:
+        """
+        尝试从分享面板获取视频链接。
+        注意：Android 剪贴板无法通过 ADB 可靠读取（需要额外 APK），
+        链接获取失败时返回空字符串，不阻塞采集流程。
+        """
+        share_btn = next(
+            (n for n in nodes
+             if n.get("hittable") and "分享" in n.get("label", "")
+             and "按钮" in n.get("label", "")),
+            None
+        )
+        if not share_btn:
+            return ""
+
+        try:
+            self.client.device.press(share_btn.get("ref"))
+            time.sleep(2.0)
+
+            share_nodes = self.client.get_nodes()
+            copy_link_btn = next(
+                (n for n in share_nodes
+                 if n.get("hittable") and
+                 any(k in n.get("label", "") for k in ["复制链接", "分享链接"])),
+                None
+            )
+            if not copy_link_btn:
+                self.client.adb.press_key("KEYCODE_BACK")
+                time.sleep(0.8)
+                return ""
+
+            self.client.device.press(copy_link_btn.get("ref"))
+            time.sleep(1.0)
+
+            # 尝试从 Android 剪贴板读取（需要 dumpsys 权限，部分设备可用）
+            try:
+                result = subprocess.run(
+                    ["adb", "shell",
+                     "dumpsys clipboard 2>/dev/null | grep -o 'https://[^ ]*' | head -1"],
+                    capture_output=True, text=True, timeout=5
+                )
+                url = result.stdout.strip()
+                if "douyin.com" in url:
+                    logger.info(f"获取到视频链接: {url}")
+                    self.client.adb.press_key("KEYCODE_BACK")
+                    time.sleep(0.8)
+                    return url
+            except Exception:
+                pass
+
+            self.client.adb.press_key("KEYCODE_BACK")
+            time.sleep(0.8)
+        except Exception as e:
+            logger.debug(f"获取链接失败: {e}")
+            self.client.adb.press_key("KEYCODE_BACK")
+            time.sleep(0.8)
+
+        return ""
+
     def _enter_and_collect(self, item: Dict[str, Any], nodes: List[Dict]) -> Tuple[Dict[str, Any], bool]:
         """进入全屏视频并采集；返回 (item, 是否成功进入全屏并完成主流程)。"""
         logger.info(f"进入作品: {(item.get('nickname') or '?')!r} — {item.get('title', '')[:36]!r}")
-        item.setdefault("url", "")
 
         cur = self._open_video_from_list(item, nodes)
         feed = FeedFeature(self.client)
@@ -420,6 +734,8 @@ class SearchFeature:
             if meta.get(k):
                 item[k] = meta[k]
 
+        # 重新获取最新节点再采评论（避免旧 nodes 的 ref 失效）
+        cur = self.client.get_nodes()
         comments, panel_total = feed._fetch_comments(cur, max_comments=self._max_comments)
         item["comments"] = comments
         if panel_total:
@@ -429,9 +745,12 @@ class SearchFeature:
             f"界面总数 comment_count={item.get('comment_count', '')!r}"
         )
 
-        for _ in range(2):
-            self.client.adb.press_key("KEYCODE_BACK")
-            time.sleep(1.2)
+        self.client.adb.press_key("KEYCODE_BACK")
+        time.sleep(1.5)
+        # 确保回到搜索结果列表（不是搜索输入页）
+        nodes = self.client.get_nodes()
+        if self._detect_page(nodes) != "search_results":
+            logger.warning(f"back 后不在搜索结果页，当前: {self._detect_page(nodes)}")
         return item, True
 
     def _title_matches_keyword(self, label: str) -> bool:
@@ -448,7 +767,7 @@ class SearchFeature:
             node = nodes[i]
             label = node.get("label", "").strip()
 
-            min_title_len = 6 if self._topic_mode else 8
+            min_title_len = 5  # 降低标题长度要求，确保能识别更多作品
             _tab_exact = {
                 "综合", "视频", "用户", "直播", "话题", "商品", "图文",
                 "搜索", "返回", "清空", "筛选", "切换", "追问", "最热", "最新",
@@ -457,14 +776,23 @@ class SearchFeature:
             is_chrome = is_chrome or any(
                 x in label for x in ("是否允许", "填入搜索框", "请检查网络连接")
             )
+            # 直播间卡片不是视频，跳过
+            is_live = "点击进入直播间" in label or label == "直播中"
+            # 时间戳不是标题
+            is_timestamp = bool(
+                re.match(r'^(昨天|今天|前天)\d{1,2}:\d{2}$', label) or
+                re.match(r'^\d{1,2}:\d{2}$', label) or
+                re.match(r'^\d+[天小时分钟秒]前$', label)
+            )
 
-            # 视频标题：较长文本；话题页标题不一定含关键词
+            # 视频标题：较长文本；不再强制要求包含关键词，以提高识别率
             if (len(label) >= min_title_len and not node.get("hittable")
                     and not is_chrome
+                    and not is_live
+                    and not is_timestamp
                     and not re.match(r'^\d{4}\.\d{2}\.\d{2}$', label)
                     and not re.match(r'^\d+:\d+$', label)
-                    and "次播放" not in label
-                    and self._title_matches_keyword(label)):
+                    and "次播放" not in label):
 
                 item = {
                     "nickname": "", "author_handle": "", "title": label,
@@ -482,11 +810,13 @@ class SearchFeature:
                         break
 
                 # 往后找日期、互动、兜底作者
-                for j in range(i + 1, min(i + 18, len(nodes))):
+                for j in range(i + 1, min(i + 25, len(nodes))):  # 增加搜索范围
                     nj = nodes[j]
                     next_label = nj.get("label", "").strip()
 
                     if re.match(r'^\d{4}\.\d{2}\.\d{2}$', next_label) or re.match(r'^\d{2}\.\d{2}$', next_label):
+                        item["date"] = next_label
+                    elif re.search(r'^\d+[天小时分钟秒]前$', next_label) or next_label in ("昨天", "前天"):
                         item["date"] = next_label
 
                     elif "喜欢" in next_label:
@@ -504,19 +834,26 @@ class SearchFeature:
                         if m:
                             item["shares"] = m.group(1)
 
-                    elif (not item["nickname"] and next_label and len(next_label) < 25
+                    elif (not item["nickname"] and next_label and len(next_label) < 30  # 增加长度限制
                           and not re.match(r'^\d', next_label)
                           and not _looks_like_bad_author_nickname(next_label)
                           and not any(k in next_label for k in ["按钮", "喜欢", "评论", "分享", "收藏"])):
                         item["nickname"] = next_label
 
-                    elif len(next_label) > 8 and "按钮" not in next_label and j > i + 3:
+                    # 遇到下一个视频标题就停止
+                    elif (len(next_label) >= min_title_len and not nj.get("hittable")
+                          and not is_chrome
+                          and not re.match(r'^\d{4}\.\d{2}\.\d{2}$', next_label)
+                          and not re.match(r'^\d+:\d+$', next_label)
+                          and "次播放" not in next_label):
                         break
 
-                if item["nickname"] or item["title"]:
+                # 即使没有作者，也添加作品
+                if item["title"]:
                     items.append(item)
-                    i += 8  # 跳过已处理的节点
+                    i += 10  # 跳过已处理的节点
                     continue
             i += 1
 
+        logger.info(f"解析到 {len(items)} 个作品")
         return items

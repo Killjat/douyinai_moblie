@@ -148,8 +148,7 @@ class FeedFeature:
         """打开评论区抓取评论；返回 (评论列表, 面板标题解析出的总评论数字符串)。"""
         comment_btn = next(
             (n for n in nodes
-             if n.get("hittable") and n.get("label", "").startswith("评论")
-             and re.search(r'\d+', n.get("label", ""))),
+             if n.get("hittable") and n.get("label", "").startswith("评论")),
             None
         )
         if not comment_btn:
@@ -157,7 +156,7 @@ class FeedFeature:
                 if not n.get("hittable"):
                     continue
                 lab = n.get("label", "").strip()
-                if "评论" in lab and re.search(r"\d+", lab):
+                if "评论" in lab:
                     comment_btn = n
                     break
         if not comment_btn:
@@ -197,7 +196,7 @@ class FeedFeature:
         seen: Set[Tuple[str, str]] = set()
         merged: List[Dict[str, Any]] = []
         stagnant_rounds = 0
-        max_rounds = 60 if max_comments > 20 else 8
+        max_rounds = max(4, min(max_comments // 3, 20))
         nodes = initial_nodes
 
         for _ in range(max_rounds):

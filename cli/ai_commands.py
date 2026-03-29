@@ -19,8 +19,43 @@ def ai():
 @click.argument("task")
 @click.option("--device", "-d", help="设备 ID")
 @click.option("--api-key", help="DeepSeek API Key")
-@click.option("--max-steps", "-m", default=20, help="最大执行步数")
-def execute(task, device, api_key, max_steps):
+@click.option("--max-rounds", "-m", default=20, help="最大决策轮次")
+@click.option("--output", "-o", help="结果输出文件")
+def run(task, device, api_key, max_rounds, output):
+    """DeepSeek 智能执行任务（function calling 驱动）
+
+    示例:
+        python run.py ai run "搜索跨境电商，采集5个视频的评论"
+        python run.py ai run "扫描推荐视频流，采集3个视频"
+    """
+    import json
+    from pathlib import Path
+    from ai_brain.deepseek_agent import DeepSeekAgent
+
+    try:
+        agent = DeepSeekAgent(device_id=device, api_key=api_key)
+        result = agent.run(task, max_rounds=max_rounds)
+
+        click.echo(f"\n任务: {result['task']}")
+        click.echo(f"轮次: {result['rounds']}")
+        if result.get("summary"):
+            click.echo(f"摘要: {result['summary']}")
+
+        data = result.get("data", {})
+        if output:
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            with open(output, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            click.echo(f"结果已保存: {output}")
+        else:
+            click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+
+    except Exception as e:
+        logger.error(f"执行失败: {e}")
+        raise
+
+
+
     """使用 AI 智能执行任务
 
     Example:

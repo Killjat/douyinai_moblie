@@ -75,9 +75,107 @@ class ADBManager:
         logger.debug(f"点击坐标: ({x}, {y})")
 
     def input_text(self, text: str) -> None:
-        """输入文本"""
+        """输入文本（仅适用于 ASCII，中文请用 input_text_unicode）"""
         self.execute(["shell", "input", "text", text])
         logger.debug(f"输入文本: {text}")
+
+    def input_text_unicode(self, text: str) -> bool:
+        """
+        输入任意 Unicode 文本（含中文）到 Android 设备当前焦点输入框。
+
+        Android 的 `adb shell input text` 不支持 ASCII 以外的字符，
+        所有可靠方案都需要在设备上安装一个辅助 APK：
+
+          推荐：ADBKeyboard
+            安装：adb install ADBKeyboard.apk
+            下载：https://github.com/senzhk/ADBKeyBoard/releases
+            安装后本方法自动检测并使用，无需额外配置。
+
+          备选：mobile-mcp DeviceKit
+            安装：adb install mobilenext-devicekit.apk
+            下载：https://github.com/mobile-next/devicekit-android/releases
+
+        未安装任何辅助 APK 时，本方法会尝试 `input text` 直传（对纯 ASCII 有效），
+        中文等 Unicode 字符将无法输入。
+        """
+        import base64
+        import time
+
+        b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+        # ── 方案 1：ADBKeyboard（切换输入法 → 输入 → 切回）────────────────
+        try:
+            ime_out = subprocess.run(
+                ["adb", "shell", "ime", "list", "-s"],
+                capture_output=True, text=True, timeout=5
+            ).stdout
+            if "com.android.adbkeyboard/.AdbIME" in ime_out:
+                # 记录当前输入法，输入完切回
+                current_ime = subprocess.run(
+                    ["adb", "shell", "settings", "get", "secure", "default_input_method"],
+                    capture_output=True, text=True, timeout=5
+                ).stdout.strip()
+
+                subprocess.run(
+                    ["adb", "shell", "ime", "set", "com.android.adbkeyboard/.AdbIME"],
+                    capture_output=True, timeout=5
+                )
+                time.sleep(0.3)
+
+                subprocess.run(
+                    ["adb", "shell", "am", "broadcast",
+                     "-a", "ADB_INPUT_B64", "--es", "msg", b64],
+                    capture_output=True, timeout=5
+                )
+                time.sleep(0.4)
+
+                logger.info(f"ADBKeyboard 输入成功: {text!r}")
+
+                # 切回原输入法（调用方负责触发搜索）
+                if current_ime and current_ime != "com.android.adbkeyboard/.AdbIME":
+                    subprocess.run(
+                        ["adb", "shell", "ime", "set", current_ime],
+                        capture_output=True, timeout=5
+                    )
+                return True
+        except Exception:
+            pass
+
+        # ── 方案 2：mobile-mcp DeviceKit ─────────────────────────────────
+        try:
+            pkg_out = subprocess.run(
+                ["adb", "shell", "pm", "list", "packages", "com.mobilenext.devicekit"],
+                capture_output=True, text=True, timeout=5
+            ).stdout
+            if "com.mobilenext.devicekit" in pkg_out:
+                subprocess.run(
+                    ["adb", "shell", "am", "broadcast",
+                     "-a", "com.mobilenext.devicekit.SET_CLIPBOARD",
+                     "--es", "text", text],
+                    capture_output=True, timeout=5
+                )
+                time.sleep(0.3)
+                self.press_key("KEYCODE_PASTE")
+                time.sleep(0.5)
+                logger.info(f"DeviceKit 剪贴板输入成功: {text!r}")
+                return True
+        except Exception:
+            pass
+
+        # ── 兜底：input text 直传（仅 ASCII 有效）────────────────────────
+        logger.warning(
+            f"未检测到 ADBKeyboard 或 DeviceKit，中文输入可能失败。"
+            f"请安装 ADBKeyboard: https://github.com/senzhk/ADBKeyBoard/releases"
+        )
+        try:
+            result = subprocess.run(
+                ["adb", "shell", "input", "text", text],
+                capture_output=True, text=True, timeout=10
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.error(f"input text 失败: {e}")
+            return False
 
     def press_key(self, keycode: str) -> None:
         """按键事件"""

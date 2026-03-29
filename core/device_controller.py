@@ -61,49 +61,45 @@ class DeviceController:
             raise RuntimeError("没有找到已连接的设备")
 
     def get_snapshot(self, wait_for_stable: bool = True) -> Dict[str, Any]:
-        """获取设备当前屏幕快照
-
-        Args:
-            wait_for_stable: 是否等待屏幕稳定
-
-        Returns:
-            屏幕快照数据
-        """
+        """获取设备当前屏幕快照，失败时自动重试最多 3 次（应对 uiautomator OOM 被杀）"""
         cmd = ["agent-device", "snapshot", "--json"]
-        # 不要在 session 已绑定时指定 --device 参数
-        # if self.device_id:
-        #     cmd.extend(["--device", self.device_id])
 
-        logger.debug(f"执行命令: {' '.join(cmd)}")
+        for attempt in range(5):
+            logger.debug(f"执行命令: {' '.join(cmd)}（第 {attempt+1} 次）")
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=40  # 增加超时时间到 40 秒，直播间节点多
-        )
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=40
+            )
 
-        logger.debug(f"命令返回码: {result.returncode}")
-        logger.debug(f"命令 stdout 长度: {len(result.stdout)}")
+            if result.returncode != 0:
+                logger.warning(f"获取快照失败 (返回码 {result.returncode})，第 {attempt+1}/5 次")
+                if attempt < 4:
+                    time.sleep(3.0)
+                    continue
+                logger.error(f"快照连续失败，放弃。stdout: {result.stdout[:200]}")
+                return {"nodes": []}
 
-        if result.returncode != 0:
-            logger.error(f"获取快照失败 (返回码 {result.returncode})")
-            logger.error(f"stdout: {result.stdout[:500]}")
-            logger.error(f"stderr: {result.stderr}")
-            # 不抛出异常，返回空字典
-            return {"nodes": []}
+            if not result.stdout:
+                logger.warning(f"快照输出为空，第 {attempt+1}/5 次")
+                if attempt < 4:
+                    time.sleep(3.0)
+                    continue
+                return {"nodes": []}
 
-        if not result.stdout:
-            logger.error("获取快照失败: 输出为空")
-            return {"nodes": []}
+            try:
+                response = json.loads(result.stdout)
+                return response.get("data", response)
+            except json.JSONDecodeError as e:
+                logger.warning(f"解析快照 JSON 失败: {e}，第 {attempt+1}/5 次")
+                if attempt < 4:
+                    time.sleep(3.0)
+                    continue
+                return {"nodes": []}
 
-        try:
-            # agent-device snapshot 返回格式: {"success": true, "data": {...}}
-            response = json.loads(result.stdout)
-            return response.get("data", response)
-        except json.JSONDecodeError as e:
-            logger.error(f"解析快照 JSON 失败: {e}, 输出: {result.stdout[:200]}")
-            return {"nodes": []}
+        return {"nodes": []}
 
     def execute_actions(self, actions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """执行动作序列
@@ -155,22 +151,26 @@ class DeviceController:
 
         logger.debug(f"执行点击命令: {' '.join(cmd)}")
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=20
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(f"点击超时: {ref}")
+            return {}
 
         if result.returncode != 0:
-            logger.error(f"点击失败 (返回码 {result.returncode}): {result.stderr}")
+            logger.warning(f"点击失败 (返回码 {result.returncode}): {result.stderr}")
             return {}
 
         try:
             response = json.loads(result.stdout)
             return response.get("data", response)
         except json.JSONDecodeError:
-            logger.error(f"解析点击结果失败: {result.stdout[:200]}")
+            logger.warning(f"解析点击结果失败: {result.stdout[:200]}")
             return {}
 
     def press_text(self, text: str) -> Optional[Dict[str, Any]]:

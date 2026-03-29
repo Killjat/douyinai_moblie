@@ -88,19 +88,36 @@ def related_works(nickname, title):
 
 
 @cli.command()
+@click.option("--device", "-d", help="设备 ID")
+def search_history(device):
+    """读取抖音搜索历史记录"""
+    from apps.douyin.features import SearchFeature
+    client = DouyinClient(device)
+    history = SearchFeature(client).get_search_history()
+    if history:
+        click.echo("搜索历史:")
+        for i, item in enumerate(history, 1):
+            click.echo(f"  {i}. {item}")
+    else:
+        click.echo("未找到搜索历史记录")
+
+
+
+@cli.command()
 @click.argument("keyword")
 @click.option("--count", "-n", default=10, show_default=True, help="采集数量")
 @click.option("--topic", is_flag=True, default=False, help="进入「话题」Tab 并采集该话题下的作品")
+@click.option("--latest", is_flag=True, default=False, help="按最新发布筛选")
 @click.option("--max-comments", default=100, show_default=True, help="每条作品最多采集评论数（上限 200）")
 @click.option("--output", "-o", help="输出文件路径")
 @click.option("--neo4j", is_flag=True, default=False, help="同时写入 Neo4j")
 @click.option("--device", "-d", help="设备 ID")
-def search(keyword, count, topic, max_comments, output, neo4j, device):
-    """搜索关键词，采集相关视频；加 --topic 时进入匹配的话题页再采集作品"""
+def search(keyword, count, topic, latest, max_comments, output, neo4j, device):
+    """搜索关键词，采集相关视频；--latest 按最新发布筛选"""
     from apps.douyin.features import SearchFeature
     client = DouyinClient(device)
     results = SearchFeature(client).search(
-        keyword, count=count, topic=topic, max_comments=max_comments
+        keyword, count=count, topic=topic, max_comments=max_comments, latest=latest
     )
 
     if neo4j:

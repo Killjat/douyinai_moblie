@@ -12,7 +12,11 @@ from core.adb_manager import ADBManager
 # 页面特征签名：通过快照节点标签识别当前页面
 PAGE_SIGNATURES = {
     "douyin_any":      lambda nodes: any("com.ss.android.ugc.aweme" in n.get("identifier", "") for n in nodes),
-    "douyin_feed":     lambda nodes: any("推荐" in n.get("label", "") and "按钮" in n.get("label", "") for n in nodes),
+    # 推荐页：底部导航"首页"可见，且有"推荐"按钮（已选中状态）
+    "douyin_feed":     lambda nodes: (
+        any(n.get("label", "").strip() == "首页" for n in nodes) and
+        any("推荐" in n.get("label", "") and "按钮" in n.get("label", "") for n in nodes)
+    ),
     "douyin_profile":  lambda nodes: any(n.get("label", "").strip() == "编辑主页" for n in nodes),
     "douyin_comments": lambda nodes: any("条评论" in n.get("label", "") or n.get("label", "").strip() == "关闭" for n in nodes),
 }
@@ -78,26 +82,47 @@ class DouyinClient:
         self.wait_for_page(PAGE_SIGNATURES["douyin_any"], timeout=15, desc="抖音启动")
 
     def navigate_to_feed(self) -> List[Dict]:
-        """导航到推荐视频流，返回该页面 nodes"""
-        nodes = self.get_nodes()
-        if PAGE_SIGNATURES["douyin_feed"](nodes):
-            logger.info("已在推荐页")
-            return nodes
-
-        # 个人主页需要先 back
-        if PAGE_SIGNATURES["douyin_profile"](nodes):
-            self.adb.press_key("KEYCODE_BACK")
-            time.sleep(1)
+        """
+        导航到推荐视频流。
+        策略：先找底部首页按钮点击；找不到则连按 back 退出当前页面，最多 6 次。
+        """
+        for attempt in range(6):
             nodes = self.get_nodes()
+            if PAGE_SIGNATURES["douyin_feed"](nodes):
+                logger.info("已在推荐页")
+                return nodes
 
-        home_node = next(
-            (n for n in nodes if n.get("label", "").strip() == "首页" and n.get("hittable", False)),
-            None
-        )
-        if home_node:
-            self.device.press(home_node.get("ref"))
+            # 找底部首页按钮
+            home_node = next(
+                (n for n in nodes
+                 if n.get("label", "").strip() == "首页" and n.get("hittable", False)),
+                None
+            )
+            if home_node:
+                logger.info("点击底部首页按钮")
+                self.device.press(home_node.get("ref"))
+                try:
+                    return self.wait_for_page(
+                        PAGE_SIGNATURES["douyin_feed"], timeout=10, desc="推荐页"
+                    )
+                except TimeoutError:
+                    logger.warning(f"等待推荐页超时（第 {attempt+1} 次），继续重试")
+                    continue
 
-        return self.wait_for_page(PAGE_SIGNATURES["douyin_feed"], timeout=10, desc="推荐视频流")
+            # 没找到首页按钮（可能在私信/弹层等深层页面），back 退出
+            logger.info(f"未找到首页按钮，back 退出（第 {attempt+1} 次）")
+            self.adb.press_key("KEYCODE_BACK")
+            time.sleep(1.2)
+
+        raise RuntimeError("无法导航到推荐页")
+
+    def ensure_at_feed(self) -> List[Dict]:
+        """
+        确保抖音在前台且处于推荐页，这是所有操作的固定起点。
+        先确保抖音启动，再导航到推荐页。
+        """
+        self.ensure_open()
+        return self.navigate_to_feed()
 
     def navigate_to_profile(self) -> List[Dict]:
         """导航到个人主页，返回该页面 nodes"""
@@ -114,11 +139,8 @@ class DouyinClient:
         return self.wait_for_page(PAGE_SIGNATURES["douyin_profile"], timeout=10, desc="个人主页")
 
     def return_to_feed(self) -> None:
-        """操作完成后回到推荐页（统一的干净状态），最多 back 5 次"""
-        for _ in range(5):
-            if PAGE_SIGNATURES["douyin_feed"](self.get_nodes()):
-                logger.info("已回到推荐页")
-                return
-            self.adb.press_key("KEYCODE_BACK")
-            time.sleep(1)
-        logger.warning("未能通过 back 回到推荐页")
+        """操作完成后回到推荐页（统一的干净状态）"""
+        try:
+            self.ensure_at_feed()
+        except Exception:
+            logger.warning("return_to_feed 失败，尝试强制 back")
