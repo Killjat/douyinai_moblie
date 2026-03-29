@@ -6,6 +6,55 @@
 
 ## 功能特性
 
+### 抖音搜索功能 (SearchFeature)
+
+智能关键词搜索，支持多种搜索模式和筛选方式：
+
+- **基础搜索**：输入关键词搜索相关视频
+- **搜索历史**：优先使用历史记录快速搜索，提升效率
+- **话题模式**：进入话题详情页，采集该话题下的作品
+- **最新筛选**：按最新发布时间筛选内容
+- **智能输入**：自动识别搜索输入页与搜索结果页，避免误操作
+
+```bash
+# 基础搜索（采集 10 个视频）
+python3 run.py search "跨境电商"
+
+# 搜索并保存到文件
+python3 run.py search "跨境电商" --count 20 --output output/search.json
+
+# 话题模式：进入话题详情页采集
+python3 run.py search "跨境电商" --topic
+
+# 按最新发布筛选
+python3 run.py search "跨境电商" --latest
+
+# 查看搜索历史记录
+python3 run.py search-history
+```
+
+```json
+[
+  {
+    "nickname": "跨境电商达人",
+    "author_handle": "@跨境电商达人",
+    "title": "2025跨境电商发展趋势分析",
+    "likes": "3.2万",
+    "comment_count": "856",
+    "shares": "234",
+    "url": "https://v.douyin.com/xxx",
+    "search_keyword": "跨境电商",
+    "comments": [
+      {
+        "user": "用户A",
+        "content": "很有用的分享",
+        "total_in_video": "856条评论"
+      }
+    ]
+  }
+]
+```
+
 ### 抖音个人主页 (ProfileFeature)
 
 自动导航到抖音个人主页，提取账号的完整数据：
@@ -125,6 +174,7 @@ ai_mobile_control/
 │       └── features/
 │           ├── profile.py     # 个人主页功能
 │           ├── feed.py        # 推荐视频流功能
+│           ├── search.py      # 搜索功能（支持历史记录、话题、最新筛选）
 │           ├── live.py        # 直播间采集功能
 │           └── live.md        # 直播间需求文档 & TODO
 ├── core/
@@ -183,6 +233,12 @@ python3 run.py check
 # 打开抖音
 python3 run.py open-douyin
 
+# 搜索功能
+python3 run.py search "跨境电商"
+python3 run.py search "跨境电商" --count 20 --output output/search.json
+python3 run.py search "跨境电商" --topic --latest
+python3 run.py search-history
+
 # 获取个人主页信息
 python3 run.py profile
 
@@ -210,9 +266,14 @@ python3 run.py ai interactive
 
 ```python
 from apps.douyin.client import DouyinClient
-from apps.douyin.features import ProfileFeature, FeedFeature
+from apps.douyin.features import ProfileFeature, FeedFeature, SearchFeature
 
 client = DouyinClient()
+
+# 搜索功能
+search = SearchFeature(client)
+results = search.search("跨境电商", count=20, latest=True)
+history = search.get_search_history()
 
 # 个人主页
 profile = ProfileFeature(client)
@@ -276,7 +337,7 @@ DEEPSEEK_MODEL=deepseek-chat
 
 ## 开发计划
 
-- [ ] 搜索功能
+- [x] 搜索功能（基础搜索、历史记录、话题模式、最新筛选）
 - [ ] 私信功能
 - [x] 直播间采集（主播昵称、本场点赞、在线人数、观众列表、弹幕、礼物通知）
 - [ ] 直播间标题 / 分类（调研中，见 `apps/douyin/features/live.md`）
