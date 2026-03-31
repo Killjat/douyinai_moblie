@@ -111,9 +111,9 @@ def search_history(device):
 @click.option("--max-comments", default=100, show_default=True, help="每条作品最多采集评论数（上限 200）")
 @click.option("--fetch-url", is_flag=True, default=False, help="获取视频链接（每条额外耗时约5秒）")
 @click.option("--output", "-o", help="输出文件路径")
-@click.option("--neo4j", is_flag=True, default=False, help="同时写入 Neo4j")
+@click.option("--no-neo4j", is_flag=True, default=False, help="不写入 Neo4j")
 @click.option("--device", "-d", help="设备 ID")
-def search(keyword, count, topic, latest, max_comments, fetch_url, output, neo4j, device):
+def search(keyword, count, topic, latest, max_comments, fetch_url, output, no_neo4j, device):
     """搜索关键词，采集相关视频；--latest 按最新发布筛选"""
     from apps.douyin.features import SearchFeature
     from apps.douyin.features.collectors import VideoCollector
@@ -123,7 +123,7 @@ def search(keyword, count, topic, latest, max_comments, fetch_url, output, neo4j
         keyword, count=count, topic=topic, max_comments=max_comments, latest=latest
     )
 
-    if neo4j:
+    if not no_neo4j:
         from apps.douyin.neo4j_exporter import Neo4jExporter
         exporter = Neo4jExporter()
         if exporter.connect():

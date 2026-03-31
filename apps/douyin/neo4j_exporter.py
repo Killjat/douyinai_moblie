@@ -14,6 +14,7 @@ source 字段标记数据来源：
 """
 import os
 import hashlib
+import requests
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
@@ -114,19 +115,45 @@ class Neo4jExporter:
     # ------------------------------------------------------------------
 
     def export_feed(self, videos: List[Dict[str, Any]]) -> int:
-        """
-        批量写入视频节点，并建立 (User)-[:PUBLISHED]->(Work) 关系。
-        video 字段：nickname, type, title, likes, comment_count, shares
-        注：手机端无 work_id/url，用 nickname+title 的 hash 作为临时 work_id
-        """
+        """批量写入视频节点，并建立 (User)-[:PUBLISHED]->(Work) 关系。"""
+        import time
         count = 0
+        public_ip = self._get_public_ip()
+        device_id = self._get_device_id()
+        collected_at = int(time.time() * 1000)  # 毫秒时间戳
+        if public_ip:
+            logger.info(f"外网 IP: {public_ip} | 设备: {device_id}")
         for video in videos:
-            if self._export_work(video):
+            if self._export_work(video, public_ip=public_ip,
+                                 device_id=device_id, collected_at=collected_at):
                 count += 1
         logger.info(f"Feed 导出完成: {count}/{len(videos)} 条")
         return count
 
-    def _export_work(self, video: Dict[str, Any]) -> bool:
+    def _get_public_ip(self) -> str:
+        """获取当前外网 IP，失败返回空字符串。"""
+        for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+            try:
+                resp = requests.get(url, timeout=5)
+                if resp.status_code == 200:
+                    return resp.text.strip()
+            except Exception:
+                continue
+        return ""
+
+    def _get_device_id(self) -> str:
+        """获取 ADB 设备序列号作为设备标识。"""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["adb", "get-serialno"], capture_output=True, text=True, timeout=5
+            )
+            return result.stdout.strip()
+        except Exception:
+            return ""
+
+    def _export_work(self, video: Dict[str, Any], public_ip: str = "",
+                     device_id: str = "", collected_at: int = 0) -> bool:
         nickname = video.get("nickname", "").strip()
         title = video.get("title", "").strip()
         if not nickname:
@@ -147,6 +174,10 @@ class Neo4jExporter:
                         w.comment_count = $comment_count,
                         w.shares        = $shares,
                         w.source        = 'mobile',
+                        w.public_ip     = $public_ip,
+                        w.device_id     = $device_id,
+                        w.collected_at  = $collected_at,
+                        w.search_keyword = $search_keyword,
                         w.updated_at    = timestamp()
                     WITH w
                     MERGE (u:User {nickname: $nickname})
@@ -159,6 +190,10 @@ class Neo4jExporter:
                     comment_count=video.get("comment_count", ""),
                     shares=video.get("shares", ""),
                     nickname=nickname,
+                    public_ip=public_ip,
+                    device_id=device_id,
+                    collected_at=collected_at,
+                    search_keyword=video.get("search_keyword", ""),
                 )
                 
                 # 处理评论数据
