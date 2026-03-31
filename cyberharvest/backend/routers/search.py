@@ -52,6 +52,15 @@ async def _run_search(req: SearchRequest) -> AsyncGenerator[str, None]:
                 topic=req.topic,
                 max_comments=req.max_comments,
             )
+            # 写入 Neo4j
+            try:
+                from apps.douyin.neo4j_exporter import Neo4jExporter
+                exporter = Neo4jExporter()
+                if exporter.connect():
+                    with exporter:
+                        exporter.export_feed(results)
+            except Exception as neo4j_err:
+                print(f"[Neo4j] 写入失败: {neo4j_err}")
             asyncio.run_coroutine_threadsafe(
                 queue.put({"type": "done", "total": len(results)}), loop
             )
@@ -104,4 +113,15 @@ async def search_run(req: SearchRequest):
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     results = await loop.run_in_executor(executor, do_search)
+
+    # 写入 Neo4j
+    try:
+        from apps.douyin.neo4j_exporter import Neo4jExporter
+        exporter = Neo4jExporter()
+        if exporter.connect():
+            with exporter:
+                exporter.export_feed(results)
+    except Exception as e:
+        print(f"[Neo4j] 写入失败: {e}")
+
     return {"keyword": req.keyword, "count": len(results), "results": results}

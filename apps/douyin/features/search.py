@@ -460,6 +460,8 @@ class SearchFeature:
         nodes = self._wait_for_state("search_results", timeout=10)
         if self._detect_page(nodes) == "search_results":
             logger.info("筛选完成：最新发布")
+            # 筛选后重新切回「视频」Tab
+            self._switch_to_video_tab()
             return True
 
         logger.error(f"筛选后状态异常: {self._detect_page(nodes)}")
