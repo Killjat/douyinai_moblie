@@ -177,6 +177,31 @@ class ADBManager:
             logger.error(f"input text 失败: {e}")
             return False
 
+    def get_screen_size(self) -> tuple:
+        """获取设备屏幕分辨率，返回 (width, height)"""
+        try:
+            result = subprocess.run(
+                ["adb", "shell", "wm", "size"],
+                capture_output=True, text=True, timeout=5
+            )
+            # 解析 "Physical size: 1080x2340" 或 "Override size: 1080x2340"
+            for line in result.stdout.splitlines():
+                if "size:" in line.lower():
+                    size_str = line.split(":")[-1].strip()
+                    w, h = size_str.split("x")
+                    return int(w), int(h)
+        except Exception as e:
+            logger.warning(f"获取屏幕尺寸失败: {e}")
+        return 1080, 2340  # 默认值
+
+    def scale_tap(self, x: int, y: int, ref_width: int = 1080, ref_height: int = 2340) -> tuple:
+        """将参考分辨率下的坐标按比例换算到当前设备分辨率"""
+        w, h = self.get_screen_size()
+        scaled_x = int(x * w / ref_width)
+        scaled_y = int(y * h / ref_height)
+        logger.debug(f"坐标换算: ({x},{y}) @ {ref_width}x{ref_height} → ({scaled_x},{scaled_y}) @ {w}x{h}")
+        return scaled_x, scaled_y
+
     def press_key(self, keycode: str) -> None:
         """按键事件"""
         self.execute(["shell", "input", "keyevent", keycode])

@@ -5,6 +5,7 @@
 - 支持滚动翻页，持续采集
 """
 import re
+import os
 import subprocess
 import time
 from typing import Dict, List, Any, Optional, Tuple
@@ -90,6 +91,8 @@ class SearchFeature:
                 return []
             if not self._navigate_to_search(keyword, feed_nodes):
                 return []
+            # 默认切到「视频」Tab，过滤掉综合结果中的用户/话题/商品卡
+            self._switch_to_video_tab()
             if latest:
                 if not self._apply_latest_filter():
                     logger.warning("筛选失败，继续采集未筛选的结果")
@@ -130,8 +133,8 @@ class SearchFeature:
                 any("填入搜索框" in l or "搜索框" in l for l in labels):
             return "search_input"
         # 搜索结果页：有搜索 Tab 栏（综合/用户/话题等）
-        # 注意："视频"和"直播"在推荐页也存在，不能用于判断
-        if labels & {"综合", "用户", "话题", "商品", "图文"}:
+        # 注意："视频"、"直播"、"图文" 在推荐页也存在，不能用于判断
+        if labels & {"综合", "用户", "话题", "商品"}:
             return "search_results"
         # 推荐页：底部"首页"和"推荐"按钮同时存在
         if (any(n.get("label", "").strip() == "首页" for n in nodes) and
@@ -161,6 +164,23 @@ class SearchFeature:
     # ------------------------------------------------------------------
     # 导航
     # ------------------------------------------------------------------
+
+    def _switch_to_video_tab(self) -> bool:
+        """切换到搜索结果页的「视频」Tab，返回是否成功。"""
+        time.sleep(1.0)
+        nodes = self.client.get_nodes()
+        # Tab 栏节点 hittable 可能为 False，直接按 label 匹配即可
+        video_tab = next(
+            (n for n in nodes if n.get("label", "").strip() == "视频" and n.get("ref")),
+            None
+        )
+        if not video_tab:
+            logger.warning("未找到「视频」Tab，保持当前 Tab")
+            return False
+        self.client.device.press(video_tab.get("ref"))
+        time.sleep(1.5)
+        logger.info("已切换到「视频」Tab")
+        return True
 
     def _navigate_to_search(self, keyword: str, nodes: List[Dict] = None) -> bool:
         """
@@ -415,7 +435,7 @@ class SearchFeature:
         return result
 
     def _apply_latest_filter(self) -> bool:
-        """切到视频 Tab → 打开筛选面板 → 点最新发布 → 点底部关闭面板"""
+        """切到视频 Tab → 打开筛选面板 → 点最新发布 → 关闭面板"""
         nodes = self.client.get_nodes()
         if self._detect_page(nodes) != "search_results":
             logger.error(f"不在搜索结果页: {self._detect_page(nodes)}")
@@ -433,22 +453,21 @@ class SearchFeature:
             logger.error(f"切视频 Tab 后状态异常: {self._detect_page(nodes)}")
             return False
 
-        filter_btn = next(
-            (n for n in nodes if "筛选" in n.get("label", "") and n.get("hittable")), None
-        )
-        if not filter_btn:
-            logger.error("未找到筛选按钮")
-            return False
+        # 筛选按钮弹出的是系统弹层，accessibility tree 抓不到节点
+        # 全程用 scale_tap 按比例换算坐标（参考分辨率 1080x2340）
+        logger.info("点击筛选按钮")
+        fx, fy = self.client.adb.scale_tap(1018, 312)  # 筛选按钮中心
+        self.client.adb.tap(fx, fy)
+        time.sleep(1.5)
 
-        self.client.device.press(filter_btn.get("ref"))
-        time.sleep(1.0)
-
-        # 点最新发布（通过 getevent 监听实际触摸坐标确定：x=451, y=583）
-        self.client.adb.tap(451, 583)
+        logger.info("点击「最新发布」")
+        lx, ly = self.client.adb.scale_tap(451, 583)   # 最新发布选项
+        self.client.adb.tap(lx, ly)
         time.sleep(0.5)
 
-        # 点底部导航区域关闭面板（实验验证：y=2300 不会进入视频）
-        self.client.adb.tap(540, 2300)
+        logger.info("点击「完成」关闭筛选面板")
+        dx, dy = self.client.adb.scale_tap(810, 583)   # 完成按钮
+        self.client.adb.tap(dx, dy)
         time.sleep(2.0)
 
         nodes = self._wait_for_state("search_results", timeout=10)
@@ -602,6 +621,48 @@ class SearchFeature:
         logger.success(f"搜索采集完成: {len(results)} 条（目标 {count}）")
         return results
 
+    def _capture_frame(self, save_dir: str = "output/covers") -> str:
+        """截取当前屏幕作为视频封面，返回保存路径。"""
+        os.makedirs(save_dir, exist_ok=True)
+        ts = int(time.time())
+        local_path = os.path.join(save_dir, f"cover_{ts}.png")
+        try:
+            subprocess.run(["adb", "shell", "screencap", "-p", "/sdcard/_cover.png"],
+                           capture_output=True, timeout=5)
+            subprocess.run(["adb", "pull", "/sdcard/_cover.png", local_path],
+                           capture_output=True, timeout=5)
+            logger.info(f"封面截图: {local_path}")
+        except Exception as e:
+            logger.warning(f"截图失败: {e}")
+            return ""
+        return local_path
+
+    def _extract_subtitles(self, image_path: str) -> str:
+        """用 EasyOCR 识别视频截图中的字幕文字（截图下半部分字幕区域）。"""
+        if not image_path or not os.path.exists(image_path):
+            return ""
+        try:
+            import easyocr
+            from PIL import Image as PILImage
+            import numpy as np
+
+            # 只裁取下半部分（字幕通常在 50%~85% 高度区间）
+            img = PILImage.open(image_path).convert("RGB")
+            w, h = img.size
+            subtitle_region = img.crop((0, int(h * 0.5), w, int(h * 0.85)))
+
+            reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
+            results = reader.readtext(np.array(subtitle_region), detail=0)
+            subtitle = " ".join(results).strip()
+            logger.info(f"字幕识别(OCR): {subtitle[:60]!r}")
+            return subtitle
+        except ImportError:
+            logger.warning("未安装 easyocr，跳过字幕识别。可运行: pip install easyocr")
+            return ""
+        except Exception as e:
+            logger.warning(f"字幕识别失败: {e}")
+            return ""
+
     @staticmethod
     def _looks_like_immersive_video(nodes: List[Dict]) -> bool:
         """与推荐流一致：未/已点赞、或带数字的评论按钮"""
@@ -650,9 +711,7 @@ class SearchFeature:
 
     def _get_video_url(self, nodes: List[Dict]) -> str:
         """
-        尝试从分享面板获取视频链接。
-        注意：Android 剪贴板无法通过 ADB 可靠读取（需要额外 APK），
-        链接获取失败时返回空字符串，不阻塞采集流程。
+        点分享 → 复制链接 → 粘贴到搜索框读取 URL。
         """
         share_btn = next(
             (n for n in nodes
@@ -680,32 +739,56 @@ class SearchFeature:
                 return ""
 
             self.client.device.press(copy_link_btn.get("ref"))
+            time.sleep(0.8)
+            # 关闭分享面板
+            self.client.adb.press_key("KEYCODE_BACK")
+            time.sleep(0.8)
+
+            # 点搜索框，粘贴，读取节点里的文本
+            search_btn = next(
+                (n for n in self.client.get_nodes()
+                 if n.get("hittable") and n.get("label", "").strip() == "搜索"),
+                None
+            )
+            if not search_btn:
+                return ""
+            self.client.device.press(search_btn.get("ref"))
             time.sleep(1.0)
 
-            # 尝试从 Android 剪贴板读取（需要 dumpsys 权限，部分设备可用）
-            try:
-                result = subprocess.run(
-                    ["adb", "shell",
-                     "dumpsys clipboard 2>/dev/null | grep -o 'https://[^ ]*' | head -1"],
-                    capture_output=True, text=True, timeout=5
-                )
-                url = result.stdout.strip()
-                if "douyin.com" in url:
-                    logger.info(f"获取到视频链接: {url}")
-                    self.client.adb.press_key("KEYCODE_BACK")
-                    time.sleep(0.8)
-                    return url
-            except Exception:
-                pass
-
-            self.client.adb.press_key("KEYCODE_BACK")
+            # 长按输入框触发粘贴
+            self.client.adb.tap(540, 80)
+            time.sleep(0.5)
+            self.client.adb.execute(["shell", "input", "keyevent", "KEYCODE_PASTE"])
             time.sleep(0.8)
+
+            # 从节点读取粘贴进去的文本
+            input_nodes = self.client.get_nodes()
+            url = ""
+            for n in input_nodes:
+                val = n.get("value", "").strip()
+                if "douyin.com" in val or "v.douyin" in val:
+                    url = val
+                    break
+                lab = n.get("label", "").strip()
+                if "douyin.com" in lab or "v.douyin" in lab:
+                    url = lab
+                    break
+
+            # 退出搜索框
+            self.client.adb.press_key("KEYCODE_BACK")
+            time.sleep(0.5)
+
+            if url:
+                logger.info(f"获取到视频链接: {url}")
+            return url
+
         except Exception as e:
             logger.debug(f"获取链接失败: {e}")
-            self.client.adb.press_key("KEYCODE_BACK")
-            time.sleep(0.8)
-
-        return ""
+            try:
+                self.client.adb.press_key("KEYCODE_BACK")
+            except Exception:
+                pass
+            return ""
 
     def _enter_and_collect(self, item: Dict[str, Any], nodes: List[Dict]) -> Tuple[Dict[str, Any], bool]:
         """进入全屏视频并采集；返回 (item, 是否成功进入全屏并完成主流程)。"""
@@ -733,6 +816,12 @@ class SearchFeature:
         for k in ("author_handle", "shares", "music"):
             if meta.get(k):
                 item[k] = meta[k]
+
+        # 截封面 + 识别字幕 + 获取视频链接
+        cover_path = self._capture_frame()
+        item["cover"] = cover_path
+        item["subtitle"] = self._extract_subtitles(cover_path)
+        item["url"] = self._get_video_url(self.client.get_nodes())
 
         # 重新获取最新节点再采评论（避免旧 nodes 的 ref 失效）
         cur = self.client.get_nodes()
@@ -774,7 +863,9 @@ class SearchFeature:
             }
             is_chrome = label in _tab_exact or "按钮" in label
             is_chrome = is_chrome or any(
-                x in label for x in ("是否允许", "填入搜索框", "请检查网络连接")
+                x in label for x in ("是否允许", "填入搜索框", "请检查网络连接",
+                                     "大家都在搜", "猜你想搜", "相关搜索", "章节要点",
+                                     "· 20")  # 章节时间戳格式
             )
             # 直播间卡片不是视频，跳过
             is_live = "点击进入直播间" in label or label == "直播中"
