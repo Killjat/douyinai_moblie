@@ -109,14 +109,17 @@ def search_history(device):
 @click.option("--topic", is_flag=True, default=False, help="进入「话题」Tab 并采集该话题下的作品")
 @click.option("--latest", is_flag=True, default=False, help="按最新发布筛选")
 @click.option("--max-comments", default=100, show_default=True, help="每条作品最多采集评论数（上限 200）")
+@click.option("--fetch-url", is_flag=True, default=False, help="获取视频链接（每条额外耗时约5秒）")
 @click.option("--output", "-o", help="输出文件路径")
 @click.option("--neo4j", is_flag=True, default=False, help="同时写入 Neo4j")
 @click.option("--device", "-d", help="设备 ID")
-def search(keyword, count, topic, latest, max_comments, output, neo4j, device):
+def search(keyword, count, topic, latest, max_comments, fetch_url, output, neo4j, device):
     """搜索关键词，采集相关视频；--latest 按最新发布筛选"""
     from apps.douyin.features import SearchFeature
+    from apps.douyin.features.collectors import VideoCollector
     client = DouyinClient(device)
-    results = SearchFeature(client).search(
+    collector = VideoCollector(client, max_comments=max_comments, fetch_url=fetch_url)
+    results = SearchFeature(client, collector=collector).search(
         keyword, count=count, topic=topic, max_comments=max_comments, latest=latest
     )
 

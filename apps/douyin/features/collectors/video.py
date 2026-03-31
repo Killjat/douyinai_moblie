@@ -15,9 +15,10 @@ class VideoCollector(BaseCollector):
 
     content_type = "video"
 
-    def __init__(self, client, max_comments: int = 100, **kwargs):
+    def __init__(self, client, max_comments: int = 100, fetch_url: bool = False, **kwargs):
         super().__init__(client)
         self.max_comments = max(0, min(max_comments, 200))
+        self.fetch_url = fetch_url  # 默认关闭，开启会增加每条视频约5秒耗时
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -45,8 +46,8 @@ class VideoCollector(BaseCollector):
         # 字幕识别（需安装 easyocr）
         item["subtitle"] = self._extract_subtitles(item["cover"])
 
-        # 视频链接
-        item["url"] = self._get_url(self.client.get_nodes())
+        # 视频链接（可选，默认关闭）
+        item["url"] = self._get_url(self.client.get_nodes()) if self.fetch_url else ""
 
         # 评论
         if self.max_comments > 0:
@@ -141,30 +142,11 @@ class VideoCollector(BaseCollector):
         return local_path
 
     def _extract_subtitles(self, image_path: str) -> str:
-        """用 EasyOCR 识别截图下半部分的字幕文字。"""
-        if not image_path or not os.path.exists(image_path):
-            return ""
-        try:
-            import easyocr
-            from PIL import Image as PILImage
-            import numpy as np
-            img = PILImage.open(image_path).convert("RGB")
-            w, h = img.size
-            region = img.crop((0, int(h * 0.5), w, int(h * 0.85)))
-            reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
-            results = reader.readtext(np.array(region), detail=0)
-            subtitle = " ".join(results).strip()
-            logger.info(f"字幕识别: {subtitle[:60]!r}")
-            return subtitle
-        except ImportError:
-            logger.warning("未安装 easyocr，跳过字幕识别。pip install easyocr")
-            return ""
-        except Exception as e:
-            logger.warning(f"字幕识别失败: {e}")
-            return ""
+        """字幕识别（暂不支持，留空）"""
+        return ""
 
     def _get_url(self, nodes: List[Dict]) -> str:
-        """点分享 → 复制链接 → 粘贴到搜索框读取 URL。"""
+        """点分享 → 复制链接 → 粘贴到搜索框 EditText → 从 value 提取 URL。"""
         share_btn = next(
             (n for n in nodes if n.get("hittable")
              and "分享" in n.get("label", "") and "按钮" in n.get("label", "")),
@@ -177,7 +159,7 @@ class VideoCollector(BaseCollector):
             time.sleep(2.0)
             share_nodes = self.client.get_nodes()
             copy_btn = next(
-                (n for n in share_nodes if n.get("hittable")
+                (n for n in share_nodes if n.get("ref")
                  and any(k in n.get("label", "") for k in ["复制链接", "分享链接"])),
                 None
             )
@@ -190,29 +172,33 @@ class VideoCollector(BaseCollector):
             self.client.adb.press_key("KEYCODE_BACK")
             time.sleep(0.8)
 
-            # 粘贴到搜索框读取
+            # 打开搜索框，粘贴，从 EditText.value 提取 URL
+            cur_nodes = self.client.get_nodes()
+            logger.debug(f"关闭分享面板后节点labels: {[n.get('label','').strip() for n in cur_nodes if n.get('label','').strip()][:10]}")
             search_btn = next(
-                (n for n in self.client.get_nodes()
+                (n for n in cur_nodes
                  if n.get("hittable") and n.get("label", "").strip() == "搜索"),
                 None
             )
             if not search_btn:
+                logger.warning("关闭分享面板后未找到搜索按钮，跳过 URL 获取")
                 return ""
             self.client.device.press(search_btn.get("ref"))
             time.sleep(1.0)
             self.client.adb.tap(540, 80)
-            time.sleep(0.5)
+            time.sleep(0.3)
             self.client.adb.execute(["shell", "input", "keyevent", "KEYCODE_PASTE"])
-            time.sleep(0.8)
+            time.sleep(1.0)
 
+            # 从 EditText 的 value 里用正则提取 URL
             url = ""
             for n in self.client.get_nodes():
-                for field in (n.get("value", ""), n.get("label", "")):
-                    if "douyin.com" in field or "v.douyin" in field:
-                        url = field.strip()
+                if n.get("type", "") == "android.widget.EditText":
+                    text = n.get("value", "") or n.get("label", "")
+                    match = re.search(r"https?://\S+", text)
+                    if match:
+                        url = match.group(0).rstrip("。，、…")
                         break
-                if url:
-                    break
 
             self.client.adb.press_key("KEYCODE_BACK")
             time.sleep(0.5)
