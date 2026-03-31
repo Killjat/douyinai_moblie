@@ -1,0 +1,34 @@
+{
+  "name": "cyberharvest",
+  "version": "1.0.0",
+  "description": "CyberHarvest - 抖音数据采集工具",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"electron .\"",
+    "build": "vite build && electron-builder",
+    "vite": "vite",
+    "electron": "electron ."
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "concurrently": "^8.0.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0",
+    "vite": "^5.0.0"
+  },
+  "build": {
+    "appId": "com.cyberstroll.cyberharvest",
+    "productName": "CyberHarvest",
+    "mac": {
+      "category": "public.app-category.productivity"
+    },
+    "files": ["dist/**/*", "electron/**/*"],
+    "extraResources": [
+      { "from": "../resources", "to": "resources" }
+    ]
+  }
+}

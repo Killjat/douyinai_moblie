@@ -1,0 +1,131 @@
+.app { display: flex; height: 100vh; }
+
+/* 侧边栏 */
+.sidebar {
+  width: 180px;
+  background: #1a1a1a;
+  border-right: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 12px;
+  gap: 8px;
+  -webkit-app-region: drag;
+}
+.logo {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f0c040;
+  padding: 8px 4px 16px;
+}
+.sidebar nav { display: flex; flex-direction: column; gap: 4px; -webkit-app-region: no-drag; }
+.sidebar button {
+  background: none;
+  border: none;
+  color: #aaa;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+.sidebar button:hover { background: #2a2a2a; color: #fff; }
+.sidebar button.active { background: #f0c04020; color: #f0c040; }
+
+/* 主内容 */
+.content { flex: 1; overflow-y: auto; padding: 24px; }
+
+/* 搜索页 */
+.search-bar {
+  background: #1a1a1a;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.keyword-input {
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 16px;
+  padding: 10px 14px;
+  outline: none;
+  width: 100%;
+}
+.keyword-input:focus { border-color: #f0c040; }
+.search-options { display: flex; gap: 16px; align-items: center; font-size: 13px; color: #aaa; }
+.search-options input[type=number] {
+  width: 60px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  color: #fff;
+  padding: 4px 8px;
+  margin-left: 4px;
+}
+.search-actions { display: flex; gap: 8px; }
+
+/* 按钮 */
+.btn-primary  { background: #f0c040; color: #000; border: none; border-radius: 8px; padding: 8px 20px; cursor: pointer; font-weight: 600; }
+.btn-danger   { background: #e05050; color: #fff; border: none; border-radius: 8px; padding: 8px 20px; cursor: pointer; }
+.btn-secondary{ background: #2a2a2a; color: #ccc; border: 1px solid #3a3a3a; border-radius: 8px; padding: 8px 16px; cursor: pointer; }
+.btn-install  { background: #3060e0; color: #fff; border: none; border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+
+/* 状态栏 */
+.status-bar {
+  background: #1e2a1e;
+  border: 1px solid #2a4a2a;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: #80c080;
+  margin-bottom: 12px;
+}
+
+/* 结果卡片 */
+.results { display: flex; flex-direction: column; gap: 10px; }
+.result-card {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.result-card:hover { border-color: #3a3a3a; }
+.card-header { padding: 14px 16px; cursor: pointer; }
+.card-meta { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.nickname { color: #f0c040; font-size: 13px; font-weight: 600; }
+.date { color: #666; font-size: 12px; }
+.card-title { font-size: 14px; color: #ddd; margin-bottom: 8px; line-height: 1.4; }
+.card-stats { display: flex; gap: 16px; font-size: 12px; color: #888; }
+.card-body { padding: 0 16px 14px; border-top: 1px solid #2a2a2a; }
+.cover-img { width: 100%; max-height: 200px; object-fit: cover; border-radius: 6px; margin: 12px 0; }
+.comments-title { font-size: 13px; color: #aaa; margin: 8px 0; }
+.comment-item { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid #222; font-size: 13px; }
+.comment-user { color: #f0c040; min-width: 80px; }
+.comment-content { color: #ccc; }
+
+/* 依赖检测页 */
+.deps-page { max-width: 600px; }
+.deps-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.deps-header h2 { font-size: 18px; }
+.deps-list { display: flex; flex-direction: column; gap: 10px; }
+.dep-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.dep-item.ok  { border-color: #2a4a2a; }
+.dep-item.fail{ border-color: #4a2a2a; }
+.dep-icon { font-size: 20px; }
+.dep-info { flex: 1; }
+.dep-name { font-size: 14px; font-weight: 600; }
+.dep-desc { font-size: 12px; color: #888; margin-top: 2px; }
+.dep-version { font-size: 11px; color: #666; margin-top: 2px; }
