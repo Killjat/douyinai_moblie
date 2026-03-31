@@ -22,7 +22,23 @@ export default function SearchPage({ backendUrl, currentSearchId, onSearchIdChan
   const [collecting, setCollecting]   = useState(false);
   const [scanId, setScanId]           = useState("");
 
-  const abortRef = useRef(null);
+  // 结果内搜索
+  const [filter, setFilter] = useState("");
+
+  const filteredResults = filter.trim()
+    ? results.filter(r => {
+        const q = filter.toLowerCase();
+        return (
+          (r.nickname || "").toLowerCase().includes(q) ||
+          (r.title || "").toLowerCase().includes(q) ||
+          (r.author_handle || "").toLowerCase().includes(q) ||
+          (r.comments || []).some(c =>
+            (c.content || "").toLowerCase().includes(q) ||
+            (c.user || "").toLowerCase().includes(q)
+          )
+        );
+      })
+    : results;
 
   useEffect(() => {
     if (!currentSearchId || currentSearchId === searchId) return;
@@ -211,8 +227,24 @@ export default function SearchPage({ backendUrl, currentSearchId, onSearchIdChan
 
       {searchId && <ApiPanel backendUrl={backendUrl} searchId={searchId} keyword={keyword} />}
 
+      {results.length > 0 && (
+        <div className="filter-bar">
+          <input
+            className="filter-input"
+            placeholder={`在 ${results.length} 条结果中搜索...`}
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+          />
+          {filter && (
+            <span className="filter-count">
+              {filteredResults.length} / {results.length}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="results">
-        {results.map((r, i) => <ResultCard key={i} data={r} />)}
+        {filteredResults.map((r, i) => <ResultCard key={i} data={r} />)}
       </div>
     </div>
   );
