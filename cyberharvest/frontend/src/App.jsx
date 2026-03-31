@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from "react";
 import SearchPage from "./pages/SearchPage";
 import DepsPage from "./pages/DepsPage";
+import HistoryPanel from "./components/HistoryPanel";
 import "./App.css";
 
 export default function App() {
   const [page, setPage] = useState("search");
   const [backendUrl, setBackendUrl] = useState("http://127.0.0.1:18765");
+  const [currentSearchId, setCurrentSearchId] = useState("");
 
   useEffect(() => {
     if (window.electron) {
@@ -26,10 +28,28 @@ export default function App() {
           </button>
         </nav>
       </aside>
+
       <main className="content">
-        {page === "search" && <SearchPage backendUrl={backendUrl} />}
-        {page === "deps"   && <DepsPage   backendUrl={backendUrl} />}
+        {page === "search" && (
+          <SearchPage
+            backendUrl={backendUrl}
+            currentSearchId={currentSearchId}
+            onSearchIdChange={setCurrentSearchId}
+          />
+        )}
+        {page === "deps" && <DepsPage backendUrl={backendUrl} />}
       </main>
+
+      {page === "search" && (
+        <HistoryPanel
+          backendUrl={backendUrl}
+          currentSearchId={currentSearchId}
+          onSelect={async (searchId) => {
+            setCurrentSearchId(searchId);
+            setPage("search");
+          }}
+        />
+      )}
     </div>
   );
 }

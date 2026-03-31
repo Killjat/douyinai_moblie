@@ -111,6 +111,59 @@ class SearchFeature:
             self._max_comments = 100
             self.client.return_to_feed()
 
+    def scan_list(
+        self,
+        keyword: str,
+        count: int = 20,
+        latest: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        快速扫描搜索结果列表，只返回列表页可见的基础信息（不进入视频）。
+        返回字段：nickname, author_handle, title, likes, comment_count, shares, date
+        """
+        self._keyword = keyword
+        try:
+            self.client.ensure_open()
+            feed_nodes = self.client.navigate_to_feed()
+            if not self._navigate_to_search(keyword, feed_nodes):
+                return []
+            self._switch_to_video_tab()
+            if latest:
+                self._apply_latest_filter()
+
+            items: List[Dict[str, Any]] = []
+            seen: set = set()
+            scroll_count = 0
+
+            self.client.adb.swipe(540, 900, 540, 700, duration=300)
+            time.sleep(1.5)
+
+            while len(items) < count and scroll_count < count * 3:
+                nodes = self.client.get_nodes()
+                for item in self._parse_results(nodes):
+                    t = item.get("title", "").strip()
+                    if not t or t in seen:
+                        continue
+                    seen.add(t)
+                    item["search_keyword"] = keyword
+                    items.append(item)
+                    if len(items) >= count:
+                        break
+                if len(items) >= count:
+                    break
+                self.client.adb.swipe(540, 1600, 540, 600, duration=400)
+                time.sleep(1.5)
+                scroll_count += 1
+
+            logger.success(f"列表扫描完成: {len(items)} 条")
+            return items
+        except Exception as e:
+            logger.error(f"列表扫描失败: {e}")
+            return []
+        finally:
+            self._keyword = ""
+            self.client.return_to_feed()
+
     # ------------------------------------------------------------------
     # 导航
     # ------------------------------------------------------------------
