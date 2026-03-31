@@ -43,25 +43,36 @@ class VideoCollector(BaseCollector):
         # 封面截图
         item["cover"] = self._capture_frame()
 
-        # 字幕识别（需安装 easyocr）
+        # 字幕识别（暂不支持）
         item["subtitle"] = self._extract_subtitles(item["cover"])
 
         # 视频链接（可选，默认关闭）
         item["url"] = self._get_url(self.client.get_nodes()) if self.fetch_url else ""
 
-        # 评论
+        # 等待页面完全加载（评论按钮 + 点赞按钮都出现）再采评论
         if self.max_comments > 0:
             from apps.douyin.features.feed import FeedFeature
             feed = FeedFeature(self.client)
-            cur = self.client.get_nodes()
-            comments, panel_total = feed._fetch_comments(cur, max_comments=self.max_comments)
-            item["comments"] = comments
-            if panel_total:
-                item["comment_count"] = panel_total
-            logger.info(
-                f"评论: {len(item['comments'])}/{self.max_comments} 条，"
-                f"总数={item.get('comment_count', '')!r}"
-            )
+            try:
+                cur = self.client.wait_for_page(
+                    self._is_fullscreen_ready, timeout=15, desc="全屏视频加载完成"
+                )
+            except TimeoutError:
+                logger.warning("等待全屏加载超时，尝试直接采集评论")
+                cur = self.client.get_nodes()
+
+            if not self._is_fullscreen(cur):
+                logger.warning("采集评论前页面已离开全屏，跳过评论")
+                item["comments"] = []
+            else:
+                comments, panel_total = feed._fetch_comments(cur, max_comments=self.max_comments)
+                item["comments"] = comments
+                if panel_total:
+                    item["comment_count"] = panel_total
+                logger.info(
+                    f"评论: {len(item['comments'])}/{self.max_comments} 条，"
+                    f"总数={item.get('comment_count', '')!r}"
+                )
         else:
             item["comments"] = []
 
@@ -74,7 +85,7 @@ class VideoCollector(BaseCollector):
     # ------------------------------------------------------------------
 
     def _open_video(self, item: Dict[str, Any], nodes: List[Dict]) -> List[Dict]:
-        """点击列表项进入全屏播放页。"""
+        """点击列表项进入全屏播放页，轮询等待页面加载完成。"""
         title = item.get("title", "")
         candidates = [n for n in nodes if n.get("label", "").strip() == title]
         tap = next((n for n in candidates if n.get("hittable")), None) or \
@@ -82,34 +93,31 @@ class VideoCollector(BaseCollector):
 
         if tap and tap.get("ref"):
             logger.info(f"点击列表项: {title[:40]!r}")
-            data = self.client.device.press(tap["ref"])
-            time.sleep(2.0 if data else 0.8)
-            if not data:
-                for y in (1120, 1020, 1220):
-                    self.client.adb.tap(540, y)
-                    time.sleep(1.5)
-                    cur = self.client.get_nodes()
-                    if self._is_fullscreen(cur):
-                        return cur
+            self.client.device.press(tap["ref"])
         else:
             logger.info("未匹配标题 ref，点击列表中部")
             self.client.adb.tap(540, 1050)
-            time.sleep(2.0)
 
-        cur = self.client.get_nodes()
-        if self._is_fullscreen(cur):
-            return cur
-        for _ in range(2):
-            self.client.adb.tap(540, 1150)
-            time.sleep(1.5)
-            cur = self.client.get_nodes()
-            if self._is_fullscreen(cur):
-                return cur
-        return cur
+        # 轮询等待全屏页面出现（最多15秒）
+        try:
+            return self.client.wait_for_page(
+                self._is_fullscreen, timeout=15, desc="全屏视频页"
+            )
+        except TimeoutError:
+            # 兜底：尝试点击屏幕中部
+            for y in (1120, 1020, 1220):
+                self.client.adb.tap(540, y)
+                try:
+                    return self.client.wait_for_page(
+                        self._is_fullscreen, timeout=5, desc="全屏视频页（兜底）"
+                    )
+                except TimeoutError:
+                    continue
+            return self.client.get_nodes()
 
     @staticmethod
     def _is_fullscreen(nodes: List[Dict]) -> bool:
-        """判断当前是否在全屏视频页。"""
+        """判断当前是否在全屏视频页（基础判断）。"""
         for n in nodes:
             lab = n.get("label", "").strip()
             if re.match(r"^(未|已)点赞，喜欢", lab):
@@ -117,6 +125,20 @@ class VideoCollector(BaseCollector):
             if n.get("hittable") and lab.startswith("评论") and re.search(r"\d+", lab):
                 return True
         return False
+
+    @staticmethod
+    def _is_fullscreen_ready(nodes: List[Dict]) -> bool:
+        """判断全屏视频页是否完全加载（评论按钮 + 点赞按钮都已渲染）。"""
+        has_comment = any(
+            n.get("hittable") and n.get("label", "").startswith("评论")
+            and re.search(r"\d+", n.get("label", ""))
+            for n in nodes
+        )
+        has_like = any(
+            re.match(r"^(未|已)点赞，喜欢", n.get("label", "").strip())
+            for n in nodes
+        )
+        return has_comment and has_like
 
     def _enrich_meta(self, item: Dict[str, Any], nodes: List[Dict]) -> None:
         """从全屏节点补充元数据字段。"""

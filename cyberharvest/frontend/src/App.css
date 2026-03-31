@@ -129,3 +129,59 @@
 .dep-name { font-size: 14px; font-weight: 600; }
 .dep-desc { font-size: 12px; color: #888; margin-top: 2px; }
 .dep-version { font-size: 11px; color: #666; margin-top: 2px; }
+
+/* API 面板 */
+.api-panel {
+  background: #111a2a;
+  border: 1px solid #1e3a5a;
+  border-radius: 10px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.api-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid #1e3a5a;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.api-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #60a0f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.search-id-badge {
+  background: #1e3a5a;
+  color: #80c0ff;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+.api-panel-actions { display: flex; align-items: center; gap: 8px; }
+.lang-tabs { display: flex; gap: 4px; }
+.lang-tabs button {
+  background: none;
+  border: 1px solid #2a4a6a;
+  color: #888;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lang-tabs button.active { background: #1e3a5a; color: #80c0ff; border-color: #3a6a9a; }
+.api-code {
+  padding: 14px 16px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 12px;
+  color: #a0d0ff;
+  line-height: 1.6;
+  overflow-x: auto;
+  margin: 0;
+  white-space: pre;
+}

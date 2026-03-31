@@ -1,19 +1,22 @@
 import React, { useState, useRef } from "react";
 import ResultCard from "../components/ResultCard";
+import ApiPanel from "../components/ApiPanel";
 
 export default function SearchPage({ backendUrl }) {
-  const [keyword, setKeyword]     = useState("");
-  const [count, setCount]         = useState(10);
+  const [keyword, setKeyword]         = useState("");
+  const [count, setCount]             = useState(10);
   const [maxComments, setMaxComments] = useState(5);
-  const [latest, setLatest]       = useState(false);
-  const [results, setResults]     = useState([]);
-  const [running, setRunning]     = useState(false);
-  const [status, setStatus]       = useState("");
+  const [latest, setLatest]           = useState(false);
+  const [results, setResults]         = useState([]);
+  const [running, setRunning]         = useState(false);
+  const [status, setStatus]           = useState("");
+  const [searchId, setSearchId]       = useState("");
   const abortRef = useRef(null);
 
   const start = async () => {
     if (!keyword.trim()) return;
     setResults([]);
+    setSearchId("");
     setRunning(true);
     setStatus("采集中...");
 
@@ -41,7 +44,9 @@ export default function SearchPage({ backendUrl }) {
         for (const line of lines) {
           if (!line.startsWith("data:")) continue;
           const msg = JSON.parse(line.slice(5).trim());
-          if (msg.type === "result") {
+          if (msg.type === "search_id") {
+            setSearchId(msg.search_id);
+          } else if (msg.type === "result") {
             setResults(prev => [...prev, msg.data]);
             setStatus(`已采集 ${msg.data.nickname || ""}: ${(msg.data.title || "").slice(0, 20)}`);
           } else if (msg.type === "done") {
@@ -58,18 +63,12 @@ export default function SearchPage({ backendUrl }) {
     }
   };
 
-  const stop = () => {
-    abortRef.current?.abort();
-    setRunning(false);
-    setStatus("已停止");
-  };
+  const stop = () => { abortRef.current?.abort(); setRunning(false); setStatus("已停止"); };
 
   const downloadJSON = () => {
     const blob = new Blob([JSON.stringify(results, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${keyword}_${Date.now()}.json`;
-    a.click();
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `${keyword}_${Date.now()}.json`; a.click();
   };
 
   const downloadTXT = () => {
@@ -77,10 +76,8 @@ export default function SearchPage({ backendUrl }) {
       `作者: ${r.nickname}\n标题: ${r.title}\n点赞: ${r.likes}  评论: ${r.comment_count}  分享: ${r.shares}\n日期: ${r.date}\n${"─".repeat(40)}`
     ).join("\n\n");
     const blob = new Blob([txt], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${keyword}_${Date.now()}.txt`;
-    a.click();
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `${keyword}_${Date.now()}.txt`; a.click();
   };
 
   return (
@@ -101,7 +98,7 @@ export default function SearchPage({ backendUrl }) {
         <div className="search-actions">
           {!running
             ? <button className="btn-primary" onClick={start}>开始采集</button>
-            : <button className="btn-danger"  onClick={stop}>停止</button>
+            : <button className="btn-danger" onClick={stop}>停止</button>
           }
           {results.length > 0 && <>
             <button className="btn-secondary" onClick={downloadJSON}>下载 JSON</button>
@@ -111,6 +108,8 @@ export default function SearchPage({ backendUrl }) {
       </div>
 
       {status && <div className="status-bar">{status}</div>}
+
+      {searchId && <ApiPanel backendUrl={backendUrl} searchId={searchId} keyword={keyword} />}
 
       <div className="results">
         {results.map((r, i) => <ResultCard key={i} data={r} />)}

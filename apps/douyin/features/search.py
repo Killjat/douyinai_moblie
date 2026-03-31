@@ -538,19 +538,11 @@ class SearchFeature:
                 logger.error("back 后仍不在搜索结果页，放弃采集")
                 return results
         try:
-            self.client.adb.swipe(540, 1500, 540, 500, duration=500)
-            time.sleep(2)
+            # 小幅上滑，把顶部 Tab 栏滚走，露出第一条视频
+            self.client.adb.swipe(540, 900, 540, 700, duration=300)
+            time.sleep(1.5)
         except Exception as e:
             logger.warning(f"滚动失败: {e}")
-            # 尝试使用其他方式滚动
-            try:
-                self.client.adb.execute(["shell", "input", "keyevent", "KEYCODE_PAGE_DOWN"])
-                time.sleep(2)
-                logger.info("使用 PAGE_DOWN 键滚动")
-            except Exception as e2:
-                logger.warning(f"PAGE_DOWN 键滚动失败: {e2}")
-                # 不滚动，直接尝试解析当前页面
-                logger.info("不滚动，直接尝试解析当前页面")
 
         while len(results) < count and scroll_count < max_scrolls:
             nodes = self.client.get_nodes()
@@ -598,7 +590,6 @@ class SearchFeature:
 
             if len(results) < count:
                 if not processed_this_round:
-                    # 当前页所有条目都处理过了，滚动加载新内容
                     self.client.adb.swipe(540, 1600, 540, 600, duration=400)
                     time.sleep(1.8)
                     scroll_count += 1
