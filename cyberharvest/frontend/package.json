@@ -4,10 +4,11 @@
   "description": "CyberHarvest - 抖音数据采集工具",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently \"vite\" \"electron .\"",
-    "build": "vite build && electron-builder",
+    "dev": "NODE_ENV=development concurrently \"vite\" \"electron .\"",
     "vite": "vite",
-    "electron": "electron ."
+    "build": "vite build",
+    "pack": "npm run build && electron-packager . CyberHarvest --platform=darwin --arch=x64 --out=dist/packaged --overwrite --extra-resource=../backend/dist/cyberharvest-server --extra-resource=../resources",
+    "electron": "NODE_ENV=development electron ."
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -17,18 +18,30 @@
     "@vitejs/plugin-react": "^4.0.0",
     "concurrently": "^8.0.0",
     "electron": "^28.0.0",
-    "electron-builder": "^24.0.0",
+    "electron-builder": "^26.8.1",
+    "electron-packager": "^17.1.2",
     "vite": "^5.0.0"
   },
   "build": {
     "appId": "com.cyberstroll.cyberharvest",
     "productName": "CyberHarvest",
     "mac": {
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon.icns"
     },
-    "files": ["dist/**/*", "electron/**/*"],
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
     "extraResources": [
-      { "from": "../resources", "to": "resources" }
+      {
+        "from": "../backend/dist/cyberharvest-server",
+        "to": "backend/cyberharvest-server"
+      },
+      {
+        "from": "../resources",
+        "to": "resources"
+      }
     ]
   }
 }

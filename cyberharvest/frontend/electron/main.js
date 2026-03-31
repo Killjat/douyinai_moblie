@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
+const net = require("net");
 
 let mainWindow;
 let backendProcess;
@@ -8,29 +9,58 @@ let backendProcess;
 const BACKEND_PORT = 18765;
 const isDev = process.env.NODE_ENV === "development";
 
-function startBackend() {
-  const scriptPath = path.join(__dirname, "../../backend/main.py");
-  backendProcess = spawn("python3", [
-    "-m", "uvicorn",
-    "cyberharvest.backend.main:app",
-    "--host", "127.0.0.1",
-    "--port", String(BACKEND_PORT),
-    "--reload"
-  ], {
-    cwd: path.join(__dirname, "../../.."),
-    env: { ...process.env }
-  });
+function getBackendExecutable() {
+  if (isDev) {
+    // 开发模式：用 python3
+    return {
+      cmd: "python3",
+      args: ["-m", "uvicorn", "cyberharvest.backend.main:app",
+             "--host", "127.0.0.1", "--port", String(BACKEND_PORT), "--reload"],
+      cwd: path.join(__dirname, "../../.."),
+    };
+  }
+  // 打包模式：用 PyInstaller 打出的可执行文件
+  const exeName = process.platform === "win32"
+    ? "cyberharvest-server.exe"
+    : "cyberharvest-server";
+  const exePath = path.join(process.resourcesPath, exeName);
+  return {
+    cmd: exePath,
+    args: [String(BACKEND_PORT)],
+    cwd: path.dirname(exePath),
+  };
+}
 
-  backendProcess.stdout.on("data", d => console.log("[backend]", d.toString()));
-  backendProcess.stderr.on("data", d => console.error("[backend]", d.toString()));
+function startBackend() {
+  const { cmd, args, cwd } = getBackendExecutable();
+  console.log("[backend] starting:", cmd, args.join(" "));
+  backendProcess = spawn(cmd, args, { cwd, env: { ...process.env } });
+  backendProcess.stdout.on("data", d => console.log("[backend]", d.toString().trim()));
+  backendProcess.stderr.on("data", d => console.error("[backend]", d.toString().trim()));
+  backendProcess.on("exit", code => console.log("[backend] exited:", code));
+}
+
+function waitForBackend(retries = 20) {
+  return new Promise((resolve, reject) => {
+    const check = (n) => {
+      const sock = net.connect(BACKEND_PORT, "127.0.0.1", () => {
+        sock.destroy(); resolve();
+      });
+      sock.on("error", () => {
+        if (n <= 0) return reject(new Error("backend timeout"));
+        setTimeout(() => check(n - 1), 500);
+      });
+    };
+    check(retries);
+  });
 }
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    width: 1280,
+    height: 820,
+    minWidth: 960,
+    minHeight: 640,
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -42,12 +72,17 @@ function createWindow() {
     ? "http://localhost:5173"
     : `file://${path.join(__dirname, "../dist/index.html")}`;
 
-  // 等后端启动
-  setTimeout(() => mainWindow.loadURL(url), 2000);
+  mainWindow.loadURL(url);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   startBackend();
+  try {
+    await waitForBackend();
+    console.log("[backend] ready");
+  } catch (e) {
+    console.error("[backend] failed to start:", e.message);
+  }
   createWindow();
 });
 
