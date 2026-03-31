@@ -59,13 +59,14 @@ def _is_search_results_page(nodes: List[Dict]) -> bool:
 
 
 class SearchFeature:
-    """关键词搜索，采集相关视频"""
+    """关键词搜索，采集相关内容"""
 
-    def __init__(self, client: DouyinClient):
+    def __init__(self, client: DouyinClient, collector=None):
         self.client = client
         self._keyword: str = ""
         self._topic_mode: bool = False
         self._max_comments: int = 100
+        self._collector = collector  # 外部注入，默认 None 时在 search() 里创建
 
     def search(
         self,
@@ -183,10 +184,7 @@ class SearchFeature:
         return True
 
     def _navigate_to_search(self, keyword: str, nodes: List[Dict] = None) -> bool:
-        """
-        导航到搜索结果页。
-        优先点击历史记录（快），没有则用 ADBKeyboard 直接输入。
-        """
+        """导航到搜索结果页，全程用 ADBKeyboard 输入。"""
         if nodes is None:
             nodes = self.client.get_nodes()
         if self._detect_page(nodes) != "feed":
@@ -194,7 +192,7 @@ class SearchFeature:
             return False
         logger.info("✓ 当前在推荐页")
 
-        # 点搜索按钮
+        # 点搜索按钮进入搜索输入页
         search_btn = next(
             (n for n in nodes if n.get("hittable") and n.get("label", "").strip() == "搜索"),
             None
@@ -209,20 +207,7 @@ class SearchFeature:
             logger.error("未进入搜索输入页")
             return False
 
-        # 优先点历史记录
-        nodes = self._expand_history(nodes)
-        history_node = self._find_history_node(nodes, keyword)
-        if history_node:
-            logger.info(f"✓ 历史记录命中: {self._history_label(history_node)!r}")
-            self.client.device.press(history_node.get("ref"))
-            nodes = self._wait_for_state("search_results", timeout=20)
-            if self._detect_page(nodes) == "search_results":
-                logger.info(f"历史记录搜索成功: {keyword}")
-                return True
-            logger.warning("历史记录点击后未进入搜索结果页，改用输入法")
-
-        # 用 ADBKeyboard 直接输入
-        logger.info(f"使用输入法搜索: {keyword!r}")
+        # 点输入框聚焦
         input_node = next(
             (n for n in nodes if n.get("hittable") and "搜索" in n.get("label", "")),
             None
@@ -233,6 +218,7 @@ class SearchFeature:
             self.client.adb.tap(540, 80)
         time.sleep(0.5)
 
+        # 清空输入框，输入关键词
         for _ in range(15):
             self.client.adb.press_key("KEYCODE_DEL")
         self.client.adb.input_text_unicode(keyword)
@@ -243,17 +229,18 @@ class SearchFeature:
             logger.error(f"输入验证失败，未找到 '{keyword}'")
             return False
 
-        # 点搜索框右边的搜索按钮（第一个 label="搜索" 的节点，在输入框右侧）
+        # 点搜索提交按钮
         search_btns = [n for n in nodes if n.get("label", "").strip() == "搜索" and n.get("ref")]
         if search_btns:
-            self.client.device.press(search_btns[0].get("ref"))  # 第一个是顶部搜索提交按钮
+            self.client.device.press(search_btns[0].get("ref"))
             logger.info("点击搜索按钮")
         else:
             self.client.adb.press_key("KEYCODE_ENTER")
             logger.info("按回车搜索")
+
         nodes = self._wait_for_state("search_results", timeout=20)
         if self._detect_page(nodes) == "search_results":
-            logger.info(f"输入法搜索成功: {keyword}")
+            logger.info(f"搜索成功: {keyword}")
             return True
 
         logger.error("搜索结果页加载超时")
@@ -575,7 +562,9 @@ class SearchFeature:
                 if not t or t in seen_titles:
                     continue
                 seen_titles.add(t)
-                detailed_item, ok = self._enter_and_collect(item, nodes)
+                from apps.douyin.features.collectors.video import VideoCollector
+                collector = self._collector or VideoCollector(self.client, max_comments=self._max_comments)
+                detailed_item, ok = collector.collect(item, nodes)
                 detailed_item["search_keyword"] = self._keyword
                 if self._topic_mode:
                     detailed_item["topic"] = self._keyword
@@ -620,227 +609,6 @@ class SearchFeature:
 
         logger.success(f"搜索采集完成: {len(results)} 条（目标 {count}）")
         return results
-
-    def _capture_frame(self, save_dir: str = "output/covers") -> str:
-        """截取当前屏幕作为视频封面，返回保存路径。"""
-        os.makedirs(save_dir, exist_ok=True)
-        ts = int(time.time())
-        local_path = os.path.join(save_dir, f"cover_{ts}.png")
-        try:
-            subprocess.run(["adb", "shell", "screencap", "-p", "/sdcard/_cover.png"],
-                           capture_output=True, timeout=5)
-            subprocess.run(["adb", "pull", "/sdcard/_cover.png", local_path],
-                           capture_output=True, timeout=5)
-            logger.info(f"封面截图: {local_path}")
-        except Exception as e:
-            logger.warning(f"截图失败: {e}")
-            return ""
-        return local_path
-
-    def _extract_subtitles(self, image_path: str) -> str:
-        """用 EasyOCR 识别视频截图中的字幕文字（截图下半部分字幕区域）。"""
-        if not image_path or not os.path.exists(image_path):
-            return ""
-        try:
-            import easyocr
-            from PIL import Image as PILImage
-            import numpy as np
-
-            # 只裁取下半部分（字幕通常在 50%~85% 高度区间）
-            img = PILImage.open(image_path).convert("RGB")
-            w, h = img.size
-            subtitle_region = img.crop((0, int(h * 0.5), w, int(h * 0.85)))
-
-            reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
-            results = reader.readtext(np.array(subtitle_region), detail=0)
-            subtitle = " ".join(results).strip()
-            logger.info(f"字幕识别(OCR): {subtitle[:60]!r}")
-            return subtitle
-        except ImportError:
-            logger.warning("未安装 easyocr，跳过字幕识别。可运行: pip install easyocr")
-            return ""
-        except Exception as e:
-            logger.warning(f"字幕识别失败: {e}")
-            return ""
-
-    @staticmethod
-    def _looks_like_immersive_video(nodes: List[Dict]) -> bool:
-        """与推荐流一致：未/已点赞、或带数字的评论按钮"""
-        for n in nodes:
-            lab = n.get("label", "").strip()
-            if re.match(r"^(未|已)点赞，喜欢", lab):
-                return True
-            if n.get("hittable") and lab.startswith("评论") and re.search(r"\d+", lab):
-                return True
-        return False
-
-    def _open_video_from_list(self, item: Dict[str, Any], nodes: List[Dict]) -> List[Dict]:
-        """从话题/搜索列表进入全屏播放页；ref 点击失败时用列表区域坐标兜底"""
-        title = item.get("title", "")
-        candidates = [n for n in nodes if n.get("label", "").strip() == title]
-        tap = next((n for n in candidates if n.get("hittable")), None)
-        if not tap and candidates:
-            tap = candidates[0]
-        if tap and tap.get("ref"):
-            logger.info(f"点击列表项: {title[:40]!r}")
-            data = self.client.device.press(tap["ref"])
-            time.sleep(2.0 if data else 0.8)
-            if not data:
-                logger.warning("ref 点击失败，尝试列表区坐标")
-                for y in (1120, 1020, 1220):
-                    self.client.adb.tap(540, y)
-                    time.sleep(1.5)
-                    cur = self.client.get_nodes()
-                    if self._looks_like_immersive_video(cur):
-                        return cur
-        else:
-            logger.info("未匹配标题 ref，点击列表中部")
-            self.client.adb.tap(540, 1050)
-            time.sleep(2.0)
-
-        cur = self.client.get_nodes()
-        if self._looks_like_immersive_video(cur):
-            return cur
-        for _ in range(2):  # 减少尝试次数
-            self.client.adb.tap(540, 1150)
-            time.sleep(1.5)
-            cur = self.client.get_nodes()
-            if self._looks_like_immersive_video(cur):
-                return cur
-        return cur
-
-    def _get_video_url(self, nodes: List[Dict]) -> str:
-        """
-        点分享 → 复制链接 → 粘贴到搜索框读取 URL。
-        """
-        share_btn = next(
-            (n for n in nodes
-             if n.get("hittable") and "分享" in n.get("label", "")
-             and "按钮" in n.get("label", "")),
-            None
-        )
-        if not share_btn:
-            return ""
-
-        try:
-            self.client.device.press(share_btn.get("ref"))
-            time.sleep(2.0)
-
-            share_nodes = self.client.get_nodes()
-            copy_link_btn = next(
-                (n for n in share_nodes
-                 if n.get("hittable") and
-                 any(k in n.get("label", "") for k in ["复制链接", "分享链接"])),
-                None
-            )
-            if not copy_link_btn:
-                self.client.adb.press_key("KEYCODE_BACK")
-                time.sleep(0.8)
-                return ""
-
-            self.client.device.press(copy_link_btn.get("ref"))
-            time.sleep(0.8)
-            # 关闭分享面板
-            self.client.adb.press_key("KEYCODE_BACK")
-            time.sleep(0.8)
-
-            # 点搜索框，粘贴，读取节点里的文本
-            search_btn = next(
-                (n for n in self.client.get_nodes()
-                 if n.get("hittable") and n.get("label", "").strip() == "搜索"),
-                None
-            )
-            if not search_btn:
-                return ""
-            self.client.device.press(search_btn.get("ref"))
-            time.sleep(1.0)
-
-            # 长按输入框触发粘贴
-            self.client.adb.tap(540, 80)
-            time.sleep(0.5)
-            self.client.adb.execute(["shell", "input", "keyevent", "KEYCODE_PASTE"])
-            time.sleep(0.8)
-
-            # 从节点读取粘贴进去的文本
-            input_nodes = self.client.get_nodes()
-            url = ""
-            for n in input_nodes:
-                val = n.get("value", "").strip()
-                if "douyin.com" in val or "v.douyin" in val:
-                    url = val
-                    break
-                lab = n.get("label", "").strip()
-                if "douyin.com" in lab or "v.douyin" in lab:
-                    url = lab
-                    break
-
-            # 退出搜索框
-            self.client.adb.press_key("KEYCODE_BACK")
-            time.sleep(0.5)
-
-            if url:
-                logger.info(f"获取到视频链接: {url}")
-            return url
-
-        except Exception as e:
-            logger.debug(f"获取链接失败: {e}")
-            try:
-                self.client.adb.press_key("KEYCODE_BACK")
-            except Exception:
-                pass
-            return ""
-
-    def _enter_and_collect(self, item: Dict[str, Any], nodes: List[Dict]) -> Tuple[Dict[str, Any], bool]:
-        """进入全屏视频并采集；返回 (item, 是否成功进入全屏并完成主流程)。"""
-        logger.info(f"进入作品: {(item.get('nickname') or '?')!r} — {item.get('title', '')[:36]!r}")
-
-        cur = self._open_video_from_list(item, nodes)
-        feed = FeedFeature(self.client)
-
-        if not self._looks_like_immersive_video(cur):
-            logger.warning("未识别为全屏视频页，保留列表字段并返回")
-            item["comments"] = []
-            self.client.adb.press_key("KEYCODE_BACK")
-            time.sleep(1.5)
-            return item, False
-
-        meta = feed._parse_video(cur)
-        if meta.get("title"):
-            item["title"] = meta["title"]
-        if meta.get("likes"):
-            item["likes"] = meta["likes"]
-        if meta.get("comment_count"):
-            item["comment_count"] = meta["comment_count"]
-        if meta.get("nickname"):
-            item["nickname"] = meta["nickname"]
-        for k in ("author_handle", "shares", "music"):
-            if meta.get(k):
-                item[k] = meta[k]
-
-        # 截封面 + 识别字幕 + 获取视频链接
-        cover_path = self._capture_frame()
-        item["cover"] = cover_path
-        item["subtitle"] = self._extract_subtitles(cover_path)
-        item["url"] = self._get_video_url(self.client.get_nodes())
-
-        # 重新获取最新节点再采评论（避免旧 nodes 的 ref 失效）
-        cur = self.client.get_nodes()
-        comments, panel_total = feed._fetch_comments(cur, max_comments=self._max_comments)
-        item["comments"] = comments
-        if panel_total:
-            item["comment_count"] = panel_total
-        logger.info(
-            f"本作品评论: 解析 {len(item['comments'])}/{self._max_comments} 条，"
-            f"界面总数 comment_count={item.get('comment_count', '')!r}"
-        )
-
-        self.client.adb.press_key("KEYCODE_BACK")
-        time.sleep(1.5)
-        # 确保回到搜索结果列表（不是搜索输入页）
-        nodes = self.client.get_nodes()
-        if self._detect_page(nodes) != "search_results":
-            logger.warning(f"back 后不在搜索结果页，当前: {self._detect_page(nodes)}")
-        return item, True
 
     def _title_matches_keyword(self, label: str) -> bool:
         """普通搜索：标题里应出现关键词；话题详情页：列表已按话题过滤，不再强制包含关键词。"""
